@@ -18,9 +18,12 @@ You can include the action in your workflow as adobe/aio-apps-action@0.0.1. Exam
             uses: actions/checkout@v2
           - name: Setup CLI
             uses: adobe/aio-cli-setup-action@0.0.1
+            with:
+              os: ubuntu-latest
           - name: Build
             uses: adobe/aio-apps-action@0.0.1
             with:
+              os: ubuntu-latest
               command: build
               AIO_RUNTIME_NAMESPACE: ${{ secrets.AIO_RUNTIME_NAMESPACE }}
           - name: Test
