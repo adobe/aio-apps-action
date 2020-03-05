@@ -2,7 +2,7 @@
 [![License](https://img.shields.io/badge/License-Apache%202.0-blue.svg)](https://opensource.org/licenses/Apache-2.0)
 
 # aio-apps-action
-AIO apps support for GitHub actions. This action supports Build, Test and Deploy of AIO apps.
+[Adobe Custom Applications](https://github.com/AdobeDocs/adobe-custom-applications) support for GitHub actions. This action leverages [AIO CLI](https://github.com/adobe/aio-cli) to build, test and deploy Adobe Custom Applications.
 
 # Getting Started
 You can include the action in your workflow as adobe/aio-apps-action@0.0.1. Example :
