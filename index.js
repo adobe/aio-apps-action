@@ -10,12 +10,14 @@ OF ANY KIND, either express or implied. See the License for the specific languag
 governing permissions and limitations under the License.
 */
 const core = require('@actions/core')
-const execSync = require('child_process').execSync
+const exec = require('@actions/exec')
 
 //get the command from user
 const command = core.getInput('command')
 if(!command || command === '')
   throw new Error("No aio command specified")
+
+const os = core.getInput('os');
 
 let commandStr = ""
 if(command.toLowerCase() === 'build') {
@@ -24,9 +26,9 @@ if(command.toLowerCase() === 'build') {
   if(!namespace)
     throw new Error("AIO_RUNTIME_NAMESPACE must be passed to the action")
 
-  process.env.AIO_RUNTIME_NAMESPACE = namespace
+  core.exportVariable('AIO_RUNTIME_NAMESPACE', namespace)
 
-  commandStr = "sudo --preserve-env aio app deploy --skip-deploy"
+  commandStr = "aio app deploy --skip-deploy"
 }
 else if(command.toLowerCase() === 'deploy') {
   const namespace = core.getInput('AIO_RUNTIME_NAMESPACE');
@@ -35,26 +37,31 @@ else if(command.toLowerCase() === 'deploy') {
   if(!namespace || !auth)
     throw new Error("AIO_RUNTIME_NAMESPACE and AIO_RUNTIME_AUTH must be passed to the action")
 
-  process.env.AIO_RUNTIME_NAMESPACE = namespace
-  process.env.AIO_RUNTIME_AUTH = auth
+  core.exportVariable('AIO_RUNTIME_NAMESPACE', namespace)
+  core.exportVariable('AIO_RUNTIME_AUTH', auth)
 
-  commandStr = "sudo --preserve-env aio app deploy --skip-build"
+  commandStr = "aio app deploy --skip-build"
 }
 else if(command.toLowerCase() === 'test') {
-  commandStr = "sudo npm install -g jest; npm i; aio app test"
+  commandStr = "npm install -g jest; aio app test"
 }
 
 try {
   console.log(`Executing command ${command}!`)
-  runCLICommand(commandStr)
+  runCLICommand(os, commandStr)
+  .then(() => {
+    console.log("action completed")
+  })
+  .catch(e => {
+    core.setFailed(e.message);
+  })
 } catch (error) {
   core.setFailed(error.message);
 }
 
-function runCLICommand(commandStr) {
-  let options = {
-      stdio: 'inherit',
-      env: process.env
-  }
-  execSync(commandStr, options)
+async function runCLICommand(os, commandStr) {
+  if(os && os.startsWith("ubuntu"))
+    commandStr = 'sudo --preserve-env ' + commandStr
+
+  await exec.exec(commandStr)
 }
