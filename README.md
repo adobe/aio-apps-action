@@ -5,7 +5,7 @@
 [Adobe Custom Applications](https://github.com/AdobeDocs/adobe-custom-applications) support for GitHub actions. This action leverages [AIO CLI](https://github.com/adobe/aio-cli) to build, test and deploy Adobe Custom Applications.
 
 # Getting Started
-You can include the action in your workflow as adobe/aio-apps-action@0.0.1. Example :
+You can include the action in your workflow as adobe/aio-apps-action@1.0.0. Example :
 
 
 ```
@@ -17,21 +17,21 @@ You can include the action in your workflow as adobe/aio-apps-action@0.0.1. Exam
           - name: Checkout
             uses: actions/checkout@v2
           - name: Setup CLI
-            uses: adobe/aio-cli-setup-action@0.0.1
+            uses: adobe/aio-cli-setup-action@1.0.0
             with:
               os: ubuntu-latest
           - name: Build
-            uses: adobe/aio-apps-action@0.0.1
+            uses: adobe/aio-apps-action@1.0.0
             with:
               os: ubuntu-latest
               command: build
               AIO_RUNTIME_NAMESPACE: ${{ secrets.AIO_RUNTIME_NAMESPACE }}
           - name: Test
-            uses: adobe/aio-apps-action@0.0.1
+            uses: adobe/aio-apps-action@1.0.0
             with:
               command: test
           - name: Deploy
-            uses: adobe/aio-apps-action@0.0.1
+            uses: adobe/aio-apps-action@1.0.0
             with:
               command: deploy
               AIO_RUNTIME_AUTH: ${{ secrets.AIO_RUNTIME_AUTH }}
