@@ -1,6 +1,6 @@
 {
   "name": "aio-apps-action",
-  "version": "0.0.1",
+  "version": "1.0.0",
   "description": "GitHub Action to Build, Test and Deploy AIO Apps",
   "scripts": {
     "lint": "eslint index.js",
