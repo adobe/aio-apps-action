@@ -19,7 +19,7 @@ if(!command || command === '')
 
 const os = core.getInput('os');
 
-let commandStr = ""
+let commandStr = []
 if(command.toLowerCase() === 'build') {
   const namespace = core.getInput('AIO_RUNTIME_NAMESPACE');
 
@@ -28,7 +28,7 @@ if(command.toLowerCase() === 'build') {
 
   core.exportVariable('AIO_RUNTIME_NAMESPACE', namespace)
 
-  commandStr = "aio app deploy --skip-deploy"
+  commandStr.push("aio app deploy --skip-deploy")
 }
 else if(command.toLowerCase() === 'deploy') {
   const namespace = core.getInput('AIO_RUNTIME_NAMESPACE');
@@ -40,10 +40,11 @@ else if(command.toLowerCase() === 'deploy') {
   core.exportVariable('AIO_RUNTIME_NAMESPACE', namespace)
   core.exportVariable('AIO_RUNTIME_AUTH', auth)
 
-  commandStr = "aio app deploy --skip-build"
+  commandStr.push("aio app deploy --skip-build")
 }
 else if(command.toLowerCase() === 'test') {
-  commandStr = "npm install -g jest; aio app test"
+  commandStr.push("npm install -g jest")
+  commandStr.push("aio app test")
 }
 
 try {
@@ -60,8 +61,9 @@ try {
 }
 
 async function runCLICommand(os, commandStr) {
-  if(os && os.startsWith("ubuntu"))
-    commandStr = 'sudo --preserve-env ' + commandStr
-
-  await exec.exec(commandStr)
+  commandStr.forEach(cmd => {
+    if(os && os.startsWith("ubuntu"))
+      cmd = 'sudo --preserve-env ' + cmd
+      await exec.exec(cmd)
+  })
 }
