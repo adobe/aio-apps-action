@@ -62,7 +62,7 @@ try {
 
 async function runCLICommand(os, commandStr) {
   let cmd
-  for(let i = 0; i <= commandStr.length; i++) {
+  for(let i = 0; i < commandStr.length; i++) {
     cmd = commandStr[i]
     if(os && os.startsWith("ubuntu"))
       cmd = 'sudo --preserve-env ' + cmd
