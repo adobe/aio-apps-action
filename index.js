@@ -21,13 +21,13 @@ const os = core.getInput('os');
 
 let commandStr = []
 if(command.toLowerCase() === 'build') {
-  const namespace = core.getInput('AIO_RUNTIME_NAMESPACE');
+  // const namespace = core.getInput('AIO_RUNTIME_NAMESPACE');
 
-  if(!namespace)
-    throw new Error("AIO_RUNTIME_NAMESPACE must be passed to the action")
-
-  core.exportVariable('AIO_RUNTIME_NAMESPACE', namespace)
-
+  // if(!namespace)
+  //   throw new Error("AIO_RUNTIME_NAMESPACE must be passed to the action")
+  //
+  // core.exportVariable('AIO_RUNTIME_NAMESPACE', namespace)
+  console.log("using yml env var to build")
   commandStr.push("aio app deploy --skip-deploy")
 }
 else if(command.toLowerCase() === 'deploy') {
