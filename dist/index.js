@@ -1052,15 +1052,15 @@ if(command.toLowerCase() === 'build') {
   commandStr.push("aio app deploy --skip-deploy")
 }
 else if(command.toLowerCase() === 'deploy') {
-  const namespace = core.getInput('AIO_RUNTIME_NAMESPACE');
-  const auth = core.getInput('AIO_RUNTIME_AUTH')
-
-  if(!namespace || !auth)
-    throw new Error("AIO_RUNTIME_NAMESPACE and AIO_RUNTIME_AUTH must be passed to the action")
-
-  core.exportVariable('AIO_RUNTIME_NAMESPACE', namespace)
-  core.exportVariable('AIO_RUNTIME_AUTH', auth)
-
+  // const namespace = core.getInput('AIO_RUNTIME_NAMESPACE');
+  // const auth = core.getInput('AIO_RUNTIME_AUTH')
+  //
+  // if(!namespace || !auth)
+  //   throw new Error("AIO_RUNTIME_NAMESPACE and AIO_RUNTIME_AUTH must be passed to the action")
+  //
+  // core.exportVariable('AIO_RUNTIME_NAMESPACE', namespace)
+  // core.exportVariable('AIO_RUNTIME_AUTH', auth)
+  console.log("using yml env var to deploy")
   commandStr.push("aio app deploy --skip-build")
 }
 else if(command.toLowerCase() === 'test') {
