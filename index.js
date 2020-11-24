@@ -21,25 +21,9 @@ const os = core.getInput('os');
 
 let commandStr = []
 if(command.toLowerCase() === 'build') {
-  const namespace = core.getInput('AIO_RUNTIME_NAMESPACE');
-
-  if(!namespace)
-    throw new Error("AIO_RUNTIME_NAMESPACE must be passed to the action")
-
-  core.exportVariable('AIO_RUNTIME_NAMESPACE', namespace)
-
   commandStr.push("aio app deploy --skip-deploy")
 }
 else if(command.toLowerCase() === 'deploy') {
-  const namespace = core.getInput('AIO_RUNTIME_NAMESPACE');
-  const auth = core.getInput('AIO_RUNTIME_AUTH')
-
-  if(!namespace || !auth)
-    throw new Error("AIO_RUNTIME_NAMESPACE and AIO_RUNTIME_AUTH must be passed to the action")
-
-  core.exportVariable('AIO_RUNTIME_NAMESPACE', namespace)
-  core.exportVariable('AIO_RUNTIME_AUTH', auth)
-
   commandStr.push("aio app deploy --skip-build")
 }
 else if(command.toLowerCase() === 'test') {
