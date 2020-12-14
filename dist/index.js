@@ -1049,7 +1049,7 @@ else if(command.toLowerCase() === 'deploy') {
 }
 else if(command.toLowerCase() === 'test') {
   commandStr.push("npm install -g jest")
-  commandStr.push("aio app test")
+  commandStr.push("jest --passWithNoTests ./test")
 }
 
 try {
