@@ -1033,6 +1033,8 @@ governing permissions and limitations under the License.
 const core = __webpack_require__(470)
 const exec = __webpack_require__(986)
 
+const { context, getToken } = __webpack_require__(795)
+
 //get the command from user
 const command = core.getInput('command')
 if(!command || command === '')
@@ -1050,6 +1052,44 @@ else if(command.toLowerCase() === 'deploy') {
 else if(command.toLowerCase() === 'test') {
   commandStr.push("npm install -g jest")
   commandStr.push("jest --passWithNoTests ./test")
+}
+else if(command.toLowerCase() === 'auth') {
+  //generate jwt auth
+  const key = core.getInput('key')
+
+  const scopes = core.getInput('scopes')
+
+  const clientId = core.getInput('clientId')
+
+  const clientSecret = core.getInput('clientSecret')
+
+  const techAccId = core.getInput('technicalAccountId')
+
+  const imsOrgId = core.getInput('imsOrgId')
+
+  const imsConfig = {
+    client_id : clientId,
+    client_secret: clientSecret,
+    technical_account_id: techAccId,
+    ims_org_id: imsOrgId,
+    private_key: key.toString(),
+    meta_scopes: [
+      scopes
+    ]
+  }
+
+  getJwtToken(imsConfig)
+  .then(res => {
+    console.log('Generated auth token successfully')
+
+    console.log('Exporting token to env...')
+    core.exportVariable('AIO_ims_contexts_access__token_token', res)
+
+    console.log('Done!')
+  })
+  .catch(e => {
+    core.setFailed(e.message)
+  })
 }
 
 try {
@@ -1073,6 +1113,12 @@ async function runCLICommand(os, commandStr) {
       cmd = 'sudo --preserve-env ' + cmd
       await exec.exec(cmd)
   }
+}
+
+async function getJwtToken(imsConfig) {
+  await context.set('genjwt', imsConfig, true)
+  const token = await getToken('genjwt')
+  return token
 }
 
 
@@ -1650,6 +1696,14 @@ function isUnixExecutable(stats) {
 /***/ (function(module) {
 
 module.exports = require("fs");
+
+/***/ }),
+
+/***/ 795:
+/***/ (function() {
+
+eval("require")("@adobe/aio-lib-ims");
+
 
 /***/ }),
 
