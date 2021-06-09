@@ -60,11 +60,7 @@ else if(command.toLowerCase() === 'auth') {
   getJwtToken(imsConfig)
   .then(res => {
     console.log('Generated auth token successfully')
-
-    console.log('Exporting token to env...')
     core.exportVariable('AIO_ims_contexts_access__token_token', res)
-
-    console.log('Done!')
   })
   .catch(e => {
     core.setFailed(e.message)
