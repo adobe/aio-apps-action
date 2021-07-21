@@ -26,13 +26,45 @@ if(command.toLowerCase() === 'build') {
   commandStr.push("aio app deploy --skip-deploy")
 }
 else if(command.toLowerCase() === 'deploy') {
-  commandStr.push("aio app deploy --skip-build")
+  let deployCmd = 'aio app deploy  --skip-build'
+  const noPublish = (core.getInput('noPublish') === 'true')
+  if (noPublish) {
+    deployCmd = deployCmd + ' --no-publish'
+  }
+  commandStr.push(deployCmd)
 }
 else if(command.toLowerCase() === 'test') {
   commandStr.push("npm install -g jest")
   commandStr.push("jest --passWithNoTests ./test")
 }
 else if(command.toLowerCase() === 'auth') {
+  generateAuthToken()
+}
+
+try {
+  console.log(`Executing command ${command}!`)
+  runCLICommand(os, commandStr)
+  .then(() => {
+    console.log("action completed")
+  })
+  .catch(e => {
+    core.setFailed(e.message);
+  })
+} catch (error) {
+  core.setFailed(error.message);
+}
+
+async function runCLICommand(os, commandStr) {
+  let cmd
+  for(let i = 0; i < commandStr.length; i++) {
+    cmd = commandStr[i]
+    if(os && os.startsWith("ubuntu"))
+      cmd = 'sudo --preserve-env ' + cmd
+      await exec.exec(cmd)
+  }
+}
+
+function generateAuthToken() {
   //generate jwt auth
   const key = core.getInput('key')
 
@@ -68,29 +100,6 @@ else if(command.toLowerCase() === 'auth') {
   .catch(e => {
     core.setFailed(e.message)
   })
-}
-
-try {
-  console.log(`Executing command ${command}!`)
-  runCLICommand(os, commandStr)
-  .then(() => {
-    console.log("action completed")
-  })
-  .catch(e => {
-    core.setFailed(e.message);
-  })
-} catch (error) {
-  core.setFailed(error.message);
-}
-
-async function runCLICommand(os, commandStr) {
-  let cmd
-  for(let i = 0; i < commandStr.length; i++) {
-    cmd = commandStr[i]
-    if(os && os.startsWith("ubuntu"))
-      cmd = 'sudo --preserve-env ' + cmd
-      await exec.exec(cmd)
-  }
 }
 
 async function getJwtToken(imsConfig) {
