@@ -12,6 +12,8 @@ governing permissions and limitations under the License.
 const core = require('@actions/core')
 const exec = require('@actions/exec')
 
+const { context, getToken } = require('@adobe/aio-lib-ims')
+
 //get the command from user
 const command = core.getInput('command')
 if(!command || command === '')
@@ -24,11 +26,19 @@ if(command.toLowerCase() === 'build') {
   commandStr.push("aio app deploy --skip-deploy")
 }
 else if(command.toLowerCase() === 'deploy') {
-  commandStr.push("aio app deploy --skip-build")
+  let deployCmd = 'aio app deploy  --skip-build'
+  const noPublish = (core.getInput('noPublish') === 'true')
+  if (noPublish) {
+    deployCmd = deployCmd + ' --no-publish'
+  }
+  commandStr.push(deployCmd)
 }
 else if(command.toLowerCase() === 'test') {
   commandStr.push("npm install -g jest")
   commandStr.push("jest --passWithNoTests ./test")
+}
+else if(command.toLowerCase() === 'auth') {
+  generateAuthToken()
 }
 
 try {
@@ -52,4 +62,48 @@ async function runCLICommand(os, commandStr) {
       cmd = 'sudo --preserve-env ' + cmd
       await exec.exec(cmd)
   }
+}
+
+function generateAuthToken() {
+  //generate jwt auth
+  const key = core.getInput('key')
+
+  const scopes = core.getInput('scopes')
+
+  const clientId = core.getInput('clientId')
+
+  const clientSecret = core.getInput('clientSecret')
+
+  const techAccId = core.getInput('technicalAccountId')
+
+  const imsOrgId = core.getInput('imsOrgId')
+
+  const imsConfig = {
+    client_id : clientId,
+    client_secret: clientSecret,
+    technical_account_id: techAccId,
+    ims_org_id: imsOrgId,
+    private_key: key.toString(),
+    meta_scopes: [
+      scopes
+    ]
+  }
+
+  getJwtToken(imsConfig)
+  .then(res => {
+    console.log('Generated auth token successfully')
+    //set token to be used by CLI
+    core.exportVariable('AIO_IMS_CONTEXTS_CLI_ACCESS__TOKEN', res)
+    //mask the env var for logging
+    core.setSecret('AIO_IMS_CONTEXTS_CLI_ACCESS__TOKEN')
+  })
+  .catch(e => {
+    core.setFailed(e.message)
+  })
+}
+
+async function getJwtToken(imsConfig) {
+  await context.set('genjwt', imsConfig, true)
+  const token = await getToken('genjwt')
+  return token
 }
