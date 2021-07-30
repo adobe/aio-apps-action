@@ -93,9 +93,11 @@ function generateAuthToken() {
   .then(res => {
     console.log('Generated auth token successfully')
     //set token to be used by CLI
-    core.exportVariable('AIO_IMS_CONTEXTS_CLI_ACCESS__TOKEN', res)
+    core.exportVariable('AIO_IMS_CONTEXTS_CLI_ACCESS__TOKEN_TOKEN', res)
     //mask the env var for logging
-    core.setSecret('AIO_IMS_CONTEXTS_CLI_ACCESS__TOKEN')
+    core.setSecret('AIO_IMS_CONTEXTS_CLI_ACCESS__TOKEN_TOKEN')
+    const expiry = Date.now() + 30 * 60 * 1000 //30 mins from current time
+    core.exportVariable('AIO_IMS_CONTEXTS_CLI_ACCESS__TOKEN_EXPIRY', expiry)
   })
   .catch(e => {
     core.setFailed(e.message)
