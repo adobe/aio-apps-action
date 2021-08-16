@@ -23,7 +23,7 @@ const os = core.getInput('os');
 
 let commandStr = []
 if(command.toLowerCase() === 'build') {
-  commandStr.push("aio app deploy --skip-deploy")
+  commandStr.push("aio app build")
 }
 else if(command.toLowerCase() === 'deploy') {
   let deployCmd = 'aio app deploy  --skip-build'
