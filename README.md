@@ -5,6 +5,14 @@
 [Adobe Developer App Builder](https://github.com/AdobeDocs/project-firefly) support for GitHub actions. This action leverages [AIO CLI](https://github.com/adobe/aio-cli) to build, test and deploy App Builder applications.
 
 # Getting Started
+This Github action supports following commands
+1) `build` - Builds Adobe Firefly App. This is similar to using `aio app build` command using AIO CLI
+2) `test` - Test Adobe Firefly App. This is similar to using `aio app test` command using AIO CLI
+3) `deploy` - Deploys Adobe Firefly App. This is similar to running `aio app deploy  --skip-build` command using AIO CLI. Deploy Command also supports `--no-publish` flag for `aio app deploy` command to control publishing of Extensions. See usage section for more details.
+4) `auth` - Generates IMS Token and adds that to Github Action Enviornment for AIO CLI to use. The token is required to build and deploy Adobe Firefly Extensions.
+
+
+Command Usage and required params
 You can include the action in your workflow as adobe/aio-apps-action@1.0.0. Example :
 
 
