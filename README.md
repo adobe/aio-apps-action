@@ -8,7 +8,7 @@
 This Github action supports following commands
 1) `build` - Builds Adobe Firefly App. This is similar to using `aio app build` command using AIO CLI
 2) `test` - Test Adobe Firefly App. This is similar to using `aio app test` command using AIO CLI
-2) `deploy` - Deploys Adobe Firefly App. This is similar to running `aio app deploy  --skip-build` command using AIO CLI. Deploy Command also supports `--no-publish` flag for `aio app deploy` command to control publishing of Extensions. See usage section for more details.
+3) `deploy` - Deploys Adobe Firefly App. This is similar to running `aio app deploy  --skip-build` command using AIO CLI. Deploy Command also supports `--no-publish` flag for `aio app deploy` command to control publishing of Extensions. See usage section for more details.
 4) `auth` - Generates IMS Token and adds that to Github Action Enviornment for AIO CLI to use. The token is required to build and deploy Adobe Firefly Extensions.
 
 ## Prerequisites for Commands
@@ -31,10 +31,10 @@ This Github action supports following commands
       3) AIO_PROJECT_ID - Adobe I/O Console project ID
       4) AIO_PROJECT_NAME - Adobe I/O Console project name
       5) AIO_PROJECT_ORG_ID - IMS Org id
-      6) AIO_PROJECT_WORKSPACE_ID - Workspace Id 
+      6) AIO_PROJECT_WORKSPACE_ID - Workspace Id
       7) AIO_PROJECT_WORKSPACE_NAME - Workspace name
       8) AIO_PROJECT_WORKSPACE_DETAILS_SERVICES - list of services added to above workspace in following format (ex. '[{"code": "AdobeIOManagementAPISDK", "name": "I/O Management API"}]' )
-      9) AUTH command should have been executed prior to build to make sure required token is available in case extensions are to be published. Else use noPublish command flag to disbale app publish 
+      9) AUTH command should have been executed prior to build to make sure required token is available in case extensions are to be published. Else use noPublish command flag to disbale app publish
 
 ## Command Usage and required params
 You can include the action in your workflow as adobe/aio-apps-action@<latest version> Example :
