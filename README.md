@@ -35,6 +35,16 @@ This Github action supports following commands
       7) AIO_PROJECT_WORKSPACE_NAME - Workspace name
       8) AIO_PROJECT_WORKSPACE_DETAILS_SERVICES - list of services added to above workspace in following format (ex. '[{"code": "AdobeIOManagementAPISDK", "name": "I/O Management API"}]' )
       9) AUTH command should have been executed prior to build to make sure required token is available in case extensions are to be published. Else use noPublish command flag to disbale app publish
+4) `auth`
+    * Standalone App
+      auth command is not required for standalone Apps
+    * Extensions
+      1) CLIENTID - Client id for the Adobe I/O console project
+      2) CLIENTSECRET - Client secret for the Adobe I/O console project
+      3) TECHNICALACCOUNTID - Technical account Id for the Adobe I/O console project
+      4) IMSORGID - IMS Org Id
+      5) SCOPES - Comma separated list of required scopes for JWT token.
+      6) KEY - Private key associated with project
 
 ## Command Usage and required params
 You can include the action in your workflow as adobe/aio-apps-action@<latest version> Example :
