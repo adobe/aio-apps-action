@@ -6,17 +6,17 @@
 
 # Getting Started
 This Github action supports following commands
-1) `build` - Builds Adobe Firefly App. This is similar to using `aio app build` command using AIO CLI
-2) `test` - Test Adobe Firefly App. This is similar to using `aio app test` command using AIO CLI
-3) `deploy` - Deploys Adobe Firefly App. This is similar to running `aio app deploy  --skip-build` command using AIO CLI. Deploy Command also supports `--no-publish` flag for `aio app deploy` command to control publishing of Extensions. See usage section for more details.
-4) `auth` - Generates IMS Token and adds that to Github Action Enviornment for AIO CLI to use. The token is required to build and deploy Adobe Firefly Extensions.
+1) [build](https://github.com/adobe/aio-cli-plugin-app#aio-appbuild) - Builds App Builder application. This is similar to using `aio app build` command using AIO CLI
+2) [test](https://github.com/adobe/aio-cli-plugin-app#aio-apptest) - Test App Builder application. This is similar to using `aio app test` command using AIO CLI
+3) [deploy](https://github.com/adobe/aio-cli-plugin-app#aio-appdeploy) - Deploys App Builder application. This is similar to running `aio app deploy  --skip-build` command using AIO CLI. Deploy Command also supports `--no-publish` flag for `aio app deploy` command to control publishing of Extensions. See usage section for more details.
+4) `auth` - Generates IMS Token and adds that to Github Action Environment for AIO CLI to use. The token is required to build and deploy App Builder [Extensions](https://www.adobe.io/app-builder/docs/guides/extensions/).
 
 ## Prerequisites for Commands
 
 1) `build`
     * Standalone App
       1) AIO_RUNTIME_NAMESPACE - namespace to be used for the App
-    * Extensions
+    * [Extensions](https://www.adobe.io/app-builder/docs/guides/extensions/)
       1) AIO_RUNTIME_NAMESPACE - namespace to be used for the App
       2) AUTH command should have been executed prior to build to make sure required token is available
 
@@ -25,7 +25,7 @@ This Github action supports following commands
     * Standalone App
       1) AIO_RUNTIME_NAMESPACE - namespace to be used for the App
       2) AIO_RUNTIME_AUTH - auth for abobe namespace
-    * Extensions
+    * [Extensions](https://www.adobe.io/app-builder/docs/guides/extensions/)
       1) AIO_RUNTIME_NAMESPACE - namespace to be used for the App
       2) AIO_RUNTIME_AUTH - auth for abobe namespace
       3) AIO_PROJECT_ID - Adobe I/O Console project ID
@@ -38,7 +38,7 @@ This Github action supports following commands
 4) `auth`
     * Standalone App
       auth command is not required for standalone Apps
-    * Extensions
+    * [Extensions](https://www.adobe.io/app-builder/docs/guides/extensions/)
       1) CLIENTID - Client id for the Adobe I/O console project
       2) CLIENTSECRET - Client secret for the Adobe I/O console project
       3) TECHNICALACCOUNTID - Technical account Id for the Adobe I/O console project
@@ -96,7 +96,7 @@ jobs:
           command: deploy
 ```
 
-### For Extensions
+### For [Extensions](https://www.adobe.io/app-builder/docs/guides/extensions/)
     Set noPublish flag for Deploy command to true/false to control publishing of Extensions
 ```
 name: AIO App CI
