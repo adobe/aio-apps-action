@@ -26,7 +26,7 @@ if(command.toLowerCase() === 'build') {
   commandStr.push("aio app build")
 }
 else if(command.toLowerCase() === 'deploy') {
-  let deployCmd = 'aio app deploy  --skip-build'
+  let deployCmd = 'aio app deploy  --no-build'
   const noPublish = (core.getInput('noPublish') === 'true')
   if (noPublish) {
     deployCmd = deployCmd + ' --no-publish'
