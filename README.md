@@ -162,6 +162,21 @@ jobs:
           noPublish: false
 ```
 
+## Running from a sub-directory
+
+If the aio project is not in the root directory of your repository, you can specify the working directory by passing `workin-directory` as a string to the `with` parameter in your workflow yaml file. Example:
+
+```
+- name: Build
+  env:
+    AIO_RUNTIME_NAMESPACE: ${{ secrets.AIO_RUNTIME_NAMESPACE_PROD }}
+  uses: adobe/aio-apps-action@2.0.1
+  with:
+    working-directory: './some-sub-dir'
+    os: ${{ matrix.os }}
+    command: build
+```
+
  ## Contributing
 
 Contributions are welcomed! Read the [Contributing Guide](./.github/CONTRIBUTING.md) for more information.
