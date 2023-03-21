@@ -41,9 +41,11 @@ else if(command.toLowerCase() === 'auth') {
   generateAuthToken()
 }
 
+const workingDirectory = core.getInput('working-directory') || '.'
+
 try {
   console.log(`Executing command ${command}!`)
-  runCLICommand(os, commandStr)
+  runCLICommand(os, commandStr, workingDirectory)
   .then(() => {
     console.log("action completed")
   })
@@ -54,13 +56,13 @@ try {
   core.setFailed(error.message);
 }
 
-async function runCLICommand(os, commandStr) {
+async function runCLICommand(os, commandStr, cwd) {
   let cmd
   for(let i = 0; i < commandStr.length; i++) {
     cmd = commandStr[i]
     if(os && os.startsWith("ubuntu"))
       cmd = 'sudo --preserve-env ' + cmd
-      await exec.exec(cmd)
+      await exec.exec(cmd, [], { cwd })
   }
 }
 
