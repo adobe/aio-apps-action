@@ -4,6 +4,7 @@
   "description": "GitHub Action to Build, Test and Deploy AIO Apps",
   "scripts": {
     "lint": "eslint index.js",
+    "test": "npm run lint",
     "package": "ncc build index.js -o dist/"
   },
   "dependencies": {
