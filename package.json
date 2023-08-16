@@ -13,7 +13,7 @@
     "@adobe/aio-lib-ims": "6.3.0"
   },
   "devDependencies": {
-    "@zeit/ncc": "^0.20.5",
+    "@zeit/ncc": "^0.22.3",
     "eslint": "^8.41.0"
   }
 }
