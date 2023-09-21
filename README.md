@@ -43,9 +43,9 @@ This Github action supports following commands
       2) CLIENTSECRET - Client secret for the Adobe I/O console project
       3) TECHNICALACCOUNTID - Technical account Id for the Adobe I/O console project
       4) IMSORGID - IMS Org Id
-      5) SCOPES - Bracket-enclosed, double-quoted, and comma-separated list of required scopes for JWT token
-          - Example: `["scope1", "scope2"]`
-      7) KEY - Private key associated with project
+      5) SCOPES - Bracket-enclosed, double-quoted, and comma-separated list of required meta scopes for JWT token
+          - Example: `["meta_scope1", "meta_scope2"]`
+      6) KEY - Private key associated with project
 
 ## Command Usage and required params
 You can include the action in your workflow as adobe/aio-apps-action@<latest version> Example :
