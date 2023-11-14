@@ -104,6 +104,8 @@ function generateAuthToken() {
       console.error(`
         Invalid scope(s) provided in SCOPES variable, please provide a list of valid scopes.
         If you are providing a valid list of scopes, you may need to add the I/O Management API to your credential in the Developer Console.
+
+        More information on scopes can be found in the README: https://github.com/adobe/aio-apps-action/tree/master#required-scopes
       `)
     }
     core.setFailed(e.message)
