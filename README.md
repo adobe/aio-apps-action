@@ -163,7 +163,19 @@ jobs:
           noPublish: false
 ```
 
- ## Contributing
+#### Required scopes
+
+To deploy an extension, the credential used with this action must have access to the following scopes: 
+
+- `AdobeID, openid, read_organizations, additional_info.projectedProductContext, additional_info.roles, adobeio_api, read_client_secret, manage_client_secrets`
+
+The easiest way to attach these scopes to your credential is by subscribing the credential to the **I/O Management API** in the Developer Console.
+
+These scopes must also be added to the **SCOPES** environment variable specified above. While each scope may be added individually, the easiest way to ensure these scopes are requested during token generation is by adding the `ent_adobeio_sdk` super-scope: 
+
+- `["other_scope_1", "other_scope_2", "ent_adobeio_sdk"]`
+
+## Contributing
 
 Contributions are welcomed! Read the [Contributing Guide](./.github/CONTRIBUTING.md) for more information.
 
