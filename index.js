@@ -100,6 +100,8 @@ function generateAuthToken() {
     core.exportVariable('AIO_IMS_CONTEXTS_CLI_ACCESS__TOKEN_EXPIRY', expiry)
   })
   .catch(e => {
+    console.log('e', JSON.stringify(e))
+    console.log('e.message', e.message)
     core.setFailed(e.message)
   })
 }
