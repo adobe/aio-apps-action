@@ -100,8 +100,12 @@ function generateAuthToken() {
     core.exportVariable('AIO_IMS_CONTEXTS_CLI_ACCESS__TOKEN_EXPIRY', expiry)
   })
   .catch(e => {
-    console.log('e.error.error', e.error.error)
-    console.log('e.error.error_description', e.error.error_description)
+    if(e.error.error === 'invalid_scope') {
+      console.error(`
+        Invalid scope(s) provided in SCOPES variable, please provide a list of valid scopes.
+        If you are providing a valid list of scopes, you may need to add the I/O Management API to your credential in the Developer Console.
+      `)
+    }
     core.setFailed(e.message)
   })
 }
