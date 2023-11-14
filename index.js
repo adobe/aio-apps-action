@@ -102,7 +102,8 @@ function generateAuthToken() {
   .catch(e => {
     console.log('e', JSON.stringify(e))
     console.log('e.message', e.message)
-    core.setFailed(e.message)
+    // core.setFailed(e.message)
+    core.setFailed('sorry didnt work')
   })
 }
 
