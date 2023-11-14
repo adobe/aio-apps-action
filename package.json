@@ -5,7 +5,7 @@
   "scripts": {
     "lint": "eslint index.js",
     "test": "npm run lint",
-    "package": "ncc build index.js -o dist/"
+    "package": "./node_modules/@vercel/ncc/dist/ncc/cli.js build index.js -o dist/"
   },
   "dependencies": {
     "@actions/core": "^1.2.6",
@@ -13,7 +13,7 @@
     "@adobe/aio-lib-ims": "6.3.0"
   },
   "devDependencies": {
-    "@zeit/ncc": "^0.22.3",
+    "@vercel/ncc": "^0.38.1",
     "eslint": "^8.41.0"
   }
 }

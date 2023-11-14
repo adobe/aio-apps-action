@@ -45,7 +45,7 @@ try {
   console.log(`Executing command ${command}!`)
   runCLICommand(os, commandStr)
   .then(() => {
-    console.log("action completed2")
+    console.log("action completed")
   })
   .catch(e => {
     core.setFailed(e.message);
