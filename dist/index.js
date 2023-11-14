@@ -108832,10 +108832,11 @@ function generateAuthToken() {
     core.exportVariable('AIO_IMS_CONTEXTS_CLI_ACCESS__TOKEN_EXPIRY', expiry)
   })
   .catch(e => {
-    console.log('e', JSON.stringify(e))
+    console.log('e', e)
     console.log('e.message', e.message)
-    // core.setFailed(e.message)
-    core.setFailed('sorry didnt work')
+    console.log('e.error', e.error)
+    console.log('e.error_description', e.error_description)
+    core.setFailed(e.message)
   })
 }
 
