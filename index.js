@@ -88,9 +88,7 @@ function generateAuthToken() {
     throw new Error('SCOPES environment variable must be an array of strings (e.g. ["test_scope"]) to use the auth command')
   }
 
-  if (
-    !parsedScopes.includes('ent_adobeio_sdk')
-    ) {
+  if (!parsedScopes.includes('ent_adobeio_sdk')) {
     throw new Error('SCOPES environment variable must include the "ent_adobeio_sdk" scope (e.g. ["ent_adobeio_sdk"]) to use the auth command')
   }
 
