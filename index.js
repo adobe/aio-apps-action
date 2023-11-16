@@ -82,7 +82,7 @@ function generateAuthToken() {
   try {
     parsedScopes = JSON.parse(scopes)
   } catch (err) {
-    throw new Error('SCOPES environment variable must be a valid array of strings with double-quotes (e.g. ["ent_adobeio_sdk"]) to use the auth command')
+    throw new Error('SCOPES environment variable must be a valid array of strings with double quotes (e.g. ["ent_adobeio_sdk"]) to use the auth command')
   }
 
   if (!parsedScopes) {
@@ -90,7 +90,7 @@ function generateAuthToken() {
   }
 
   if (!Array.isArray(parsedScopes)) {
-    throw new Error('SCOPES environment variable must be an array of strings with double-quotes (e.g. ["test_scope"]) to use the auth command')
+    throw new Error('SCOPES environment variable must be an array of strings with double quotes (e.g. ["test_scope"]) to use the auth command')
   }
 
   if (!parsedScopes.includes('ent_adobeio_sdk')) {
