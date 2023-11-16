@@ -78,6 +78,20 @@ function generateAuthToken() {
 
   const imsOrgId = core.getInput('imsOrgId')
 
+  if (!scopes) {
+    throw new Error('SCOPES environment variable must be defined to use the auth command')
+  }
+
+  if (!Array.isArray(scopes)) {
+    throw new Error('SCOPES environment variable must be an array of strings (e.g. ["ent_adobeio_sdk"]) to use the auth command')
+  }
+
+  if (
+    !scopes.includes('ent_adobeio_sdk')
+    ) {
+    throw new Error('SCOPES environment variable must include the "ent_adobeio_sdk" scope (e.g. ["ent_adobeio_sdk"]) to use the auth command')
+  }
+
   const imsConfig = {
     client_id : clientId,
     client_secret: clientSecret,
