@@ -85,7 +85,7 @@ function generateAuthToken() {
   }
 
   if (!Array.isArray(parsedScopes)) {
-    throw new Error('SCOPES environment variable must be an array of strings (e.g. \["ent_adobeio_sdk"\]) to use the auth command')
+    throw new Error('SCOPES environment variable must be an array of strings (e.g. ["test_scope"]) to use the auth command')
   }
 
   if (
@@ -100,9 +100,7 @@ function generateAuthToken() {
     technical_account_id: techAccId,
     ims_org_id: imsOrgId,
     private_key: key.toString(),
-    meta_scopes: [
-      scopes
-    ]
+    meta_scopes: parsedScopes
   }
 
   getJwtToken(imsConfig)
