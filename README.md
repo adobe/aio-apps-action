@@ -171,9 +171,9 @@ To deploy an extension, the credential used with this action must have access to
 
 The easiest way to attach these scopes to your credential is by subscribing the credential to the **I/O Management API** in the Developer Console.
 
-These scopes must also be added to the **SCOPES** environment variable specified above. While each scope may be added individually, the easiest way to ensure these scopes are requested during token generation is by adding the `ent_adobeio_sdk` super-scope: 
+The only way to ensure these scopes are requested during token generation is to add the `ent_adobeio_sdk` super-scope to the **SCOPES** environment variable specified above: 
 
-- `["other_scope_1", "other_scope_2", "ent_adobeio_sdk"]`
+- `["ent_adobeio_sdk"]`
 
 ## Contributing
 
