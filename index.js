@@ -40,6 +40,9 @@ else if(command.toLowerCase() === 'test') {
 else if(command.toLowerCase() === 'auth') {
   generateAuthToken()
 }
+else if(command.toLowerCase() === 'oauth_sts') {
+  generateOAuthSTSAuthToken()
+}
 
 try {
   console.log(`Executing command ${command}!`)
@@ -62,6 +65,39 @@ async function runCLICommand(os, commandStr) {
       cmd = 'sudo --preserve-env ' + cmd
       await exec.exec(cmd)
   }
+}
+
+function generateOAuthSTSAuthToken() {
+  //generate oauth sts auth token
+
+  const scopes = core.getInput('scopes')
+
+  const clientIds = core.getInput('clientId')
+
+  const clientSecret = core.getInput('clientSecret')
+
+  const techAccId = core.getInput('technicalAccountId')
+
+  const techAccEmail = core.getInput('technicalAccountEmail')
+
+  const imsOrgId = core.getInput('imsOrgId')
+
+  const imsContextConfig = {
+  client_id: clientId,
+  client_secrets: clientIds.split(','),
+  technical_account_email: techAccEmail,
+  technical_account_id: techAccId,
+  ims_org_id: imsOrgId,
+  scopes: scopes.split(',')
+  }
+  getToken(imsContextConfig)
+  .then(res => {
+    console.log('Generated oauth sts token successfully')
+    setTokenAsEnvVar(res)
+  })
+  .catch(e => {
+    core.setFailed(e.message)
+  })
 }
 
 function generateAuthToken() {
@@ -89,23 +125,27 @@ function generateAuthToken() {
     ]
   }
 
-  getJwtToken(imsConfig)
+  getToken(imsConfig)
   .then(res => {
     console.log('Generated auth token successfully')
-    //set token to be used by CLI
-    core.exportVariable('AIO_IMS_CONTEXTS_CLI_ACCESS__TOKEN_TOKEN', res)
-    //mask the env var for logging
-    core.setSecret('AIO_IMS_CONTEXTS_CLI_ACCESS__TOKEN_TOKEN')
-    const expiry = Date.now() + 30 * 60 * 1000 //30 mins from current time
-    core.exportVariable('AIO_IMS_CONTEXTS_CLI_ACCESS__TOKEN_EXPIRY', expiry)
+    setTokenAsEnvVar(res)
   })
   .catch(e => {
     core.setFailed(e.message)
   })
 }
 
-async function getJwtToken(imsConfig) {
-  await context.set('genjwt', imsConfig, true)
-  const token = await getToken('genjwt')
+function setTokenAsEnvVar(token) {
+  //set token to be used by CLI
+  core.exportVariable('AIO_IMS_CONTEXTS_CLI_ACCESS__TOKEN_TOKEN', token)
+  //mask the env var for logging
+  core.setSecret('AIO_IMS_CONTEXTS_CLI_ACCESS__TOKEN_TOKEN')
+  const expiry = Date.now() + 30 * 60 * 1000 //30 mins from current time
+  core.exportVariable('AIO_IMS_CONTEXTS_CLI_ACCESS__TOKEN_EXPIRY', expiry)
+}
+
+async function getToken(imsConfig) {
+  await context.set('genToken', imsConfig, true)
+  const token = await getToken('genToken')
   return token
 }
