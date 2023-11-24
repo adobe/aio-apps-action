@@ -82,7 +82,6 @@ function generateOAuthSTSAuthToken() {
 
   const imsOrgId = core.getInput('imsOrgId')
 
-  console.log("Got all inputs")
   try {
     const imsContextConfig = {
     client_id: clientId,
@@ -142,7 +141,6 @@ function generateAuthToken() {
 }
 
 function setTokenAsEnvVar(token) {
-  console.log("trying to set env var")
   //set token to be used by CLI
   core.exportVariable('AIO_IMS_CONTEXTS_CLI_ACCESS__TOKEN_TOKEN', token)
   //mask the env var for logging
