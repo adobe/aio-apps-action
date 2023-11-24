@@ -72,7 +72,7 @@ function generateOAuthSTSAuthToken() {
   console.log("Trying to generate oauth sts token")
   const scopes = core.getInput('scopes')
 
-  const clientIds = core.getInput('clientId')
+  const clientId = core.getInput('clientId')
 
   const clientSecret = core.getInput('clientSecret')
 
@@ -86,7 +86,7 @@ function generateOAuthSTSAuthToken() {
   try {
     const imsContextConfig = {
     client_id: clientId,
-    client_secrets: clientIds.split(','),
+    client_secrets: clientSecret.split(','),
     technical_account_email: techAccEmail,
     technical_account_id: techAccId,
     ims_org_id: imsOrgId,
