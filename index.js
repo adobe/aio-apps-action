@@ -92,7 +92,7 @@ function generateOAuthSTSAuthToken() {
     ims_org_id: imsOrgId,
     scopes: scopes.split(',')
     }
-    getToken(imsContextConfig)
+    getAuthToken(imsContextConfig)
     .then(res => {
       console.log('Generated oauth sts token successfully')
       setTokenAsEnvVar(res)
@@ -131,7 +131,7 @@ function generateAuthToken() {
     ]
   }
 
-  getToken(imsConfig)
+  getAuthToken(imsConfig)
   .then(res => {
     console.log('Generated auth token successfully')
     setTokenAsEnvVar(res)
@@ -152,7 +152,7 @@ function setTokenAsEnvVar(token) {
   console.log("Done setting env var")
 }
 
-async function getToken(imsConfig) {
+async function getAuthToken(imsConfig) {
   console.log("getting token from ims")
   await context.set('genToken', imsConfig, true)
   const token = await getToken('genToken')
