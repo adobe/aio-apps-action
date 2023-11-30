@@ -68,7 +68,7 @@ function generateAuthToken() {
   //generate jwt auth
   const key = core.getInput('key')
 
-  const scopes = core.getInput('scopes')
+  const requiredScopes = ["ent_adobeio_sdk"]
 
   const clientId = core.getInput('clientId')
 
@@ -78,32 +78,13 @@ function generateAuthToken() {
 
   const imsOrgId = core.getInput('imsOrgId')
 
-  let parsedScopes
-  try {
-    parsedScopes = JSON.parse(scopes)
-  } catch (err) {
-    throw new Error('SCOPES environment variable must be a valid array of strings with double quotes (e.g. ["ent_adobeio_sdk"]) to use the auth command')
-  }
-
-  if (!parsedScopes) {
-    throw new Error('SCOPES environment variable must be defined to use the auth command')
-  }
-
-  if (!Array.isArray(parsedScopes)) {
-    throw new Error('SCOPES environment variable must be an array of strings with double quotes (e.g. ["test_scope"]) to use the auth command')
-  }
-
-  if (!parsedScopes.includes('ent_adobeio_sdk')) {
-    throw new Error('SCOPES environment variable must include the "ent_adobeio_sdk" scope (e.g. ["ent_adobeio_sdk"]) to use the auth command')
-  }
-
   const imsConfig = {
     client_id : clientId,
     client_secret: clientSecret,
     technical_account_id: techAccId,
     ims_org_id: imsOrgId,
     private_key: key.toString(),
-    meta_scopes: parsedScopes
+    meta_scopes: requiredScopes
   }
 
   getJwtToken(imsConfig)
@@ -117,15 +98,17 @@ function generateAuthToken() {
     core.exportVariable('AIO_IMS_CONTEXTS_CLI_ACCESS__TOKEN_EXPIRY', expiry)
   })
   .catch(e => {
+    let errorMsg = e.message
     if(e.error.error === 'invalid_scope') {
-      console.error(`
-        Invalid scope(s) provided in SCOPES variable, please provide a list of valid scopes.
-        If you are providing a valid list of scopes, you may need to add the I/O Management API to your credential in the Developer Console.
-
-        More information on scopes can be found in the README: https://github.com/adobe/aio-apps-action/tree/master#required-scopes
-      `)
+      const scopesErrorMsg = `
+        Invalid scopes requested during auth command. 
+        
+        You may need to add the I/O Management API to your credential using either the Developer Console or the aio CLI (e.g. aio app add service).
+      `
+      console.error(scopesErrorMsg)
+      errorMsg = scopesErrorMsg
     }
-    core.setFailed(e.message)
+    core.setFailed(errorMsg)
   })
 }
 

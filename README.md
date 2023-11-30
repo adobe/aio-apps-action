@@ -10,6 +10,7 @@ This Github action supports following commands
 2) [test](https://github.com/adobe/aio-cli-plugin-app#aio-apptest) - Test App Builder application. This is similar to using `aio app test` command using AIO CLI
 3) [deploy](https://github.com/adobe/aio-cli-plugin-app#aio-appdeploy) - Deploys App Builder application. This is similar to running `aio app deploy  --skip-build` command using AIO CLI. Deploy Command also supports `--no-publish` flag for `aio app deploy` command to control publishing of Extensions. See usage section for more details.
 4) `auth` - Generates IMS Token and adds that to Github Action Environment for AIO CLI to use. The token is required to build and deploy App Builder [Extensions](https://www.adobe.io/app-builder/docs/guides/extensions/).
+    * Note: Credential must have the **I/O Management API** added. This can be done either via the Developer Console or with the `aio` CLI using `aio app add service`
 
 ## Prerequisites for Commands
 
@@ -162,18 +163,6 @@ jobs:
           command: deploy
           noPublish: false
 ```
-
-#### Required scopes
-
-To deploy an extension, the credential used with this action must have access to the following scopes: 
-
-- `AdobeID, openid, read_organizations, additional_info.projectedProductContext, additional_info.roles, adobeio_api, read_client_secret, manage_client_secrets`
-
-The easiest way to attach these scopes to your credential is by subscribing the credential to the **I/O Management API** in the Developer Console.
-
-The only way to ensure these scopes are requested during token generation is to add the `ent_adobeio_sdk` super-scope to the **SCOPES** environment variable specified above: 
-
-- `["ent_adobeio_sdk"]`
 
 ## Contributing
 
