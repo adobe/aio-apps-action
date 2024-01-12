@@ -9,7 +9,8 @@ This Github action supports following commands
 1) [build](https://github.com/adobe/aio-cli-plugin-app#aio-appbuild) - Builds App Builder application. This is similar to using `aio app build` command using AIO CLI
 2) [test](https://github.com/adobe/aio-cli-plugin-app#aio-apptest) - Test App Builder application. This is similar to using `aio app test` command using AIO CLI
 3) [deploy](https://github.com/adobe/aio-cli-plugin-app#aio-appdeploy) - Deploys App Builder application. This is similar to running `aio app deploy  --skip-build` command using AIO CLI. Deploy Command also supports `--no-publish` flag for `aio app deploy` command to control publishing of Extensions. See usage section for more details.
-4) `auth` - Generates IMS Token and adds that to Github Action Environment for AIO CLI to use. The token is required to build and deploy App Builder [Extensions](https://www.adobe.io/app-builder/docs/guides/extensions/).
+4) `auth` - (Deprecated)Generates JWT based IMS Token and adds that to Github Action Environment for AIO CLI to use. The token is required to build and deploy App Builder [Extensions](https://www.adobe.io/app-builder/docs/guides/extensions/).
+5) `oauth_sts` - Generates OAuth Server-To-Server based IMS Token and adds that to Github Action Environment for AIO CLI to use. The token is required to build and deploy App Builder [Extensions](https://www.adobe.io/app-builder/docs/guides/extensions/).
 
 ## Prerequisites for Commands
 
@@ -46,6 +47,14 @@ This Github action supports following commands
       5) SCOPES - Bracket-enclosed, double-quoted, and comma-separated list of required meta scopes for JWT token
           - Example: `["meta_scope1", "meta_scope2"]`
       6) KEY - Private key associated with project
+5) `oauth_sts`
+      1) CLIENTID - Client id of Adobe I/O console project
+      2) CLIENTSECRET - Comma separated String of Client secrets of Adobe I/O console project
+      3) TECHNICALACCOUNTID - Technical account Id of Adobe I/O console project
+      4) TECHNICALACCOUNTEMAIL -  Technical account email of Adobe I/O console project
+      5) IMSORGID - IMS Org Id
+      6) SCOPES - comma-separated list of scopes for OAuth Server-To-Server Credentials
+          - Example: `AdobeID, openid, read_organizations`
 
 ## Command Usage and required params
 You can include the action in your workflow as adobe/aio-apps-action@<latest version> Example :
@@ -97,7 +106,7 @@ jobs:
           command: deploy
 ```
 
-### For [Extensions](https://www.adobe.io/app-builder/docs/guides/extensions/)
+### For [Extensions](https://www.adobe.io/app-builder/docs/guides/extensions/) - JWT based (Deprecated)
     Set noPublish flag for Deploy command to true/false to control publishing of Extensions
 ```
 name: AIO App CI
@@ -139,6 +148,72 @@ jobs:
           IMSORGID: ${{ secrets.IMSORGID_PROD }}
           SCOPES: ${{ secrets.SCOPES_PROD }}
           KEY: ${{ secrets.KEY_PROD }}
+      - name: Build
+        env:
+          AIO_RUNTIME_NAMESPACE: ${{ secrets.AIO_RUNTIME_NAMESPACE_PROD }}
+        uses: adobe/aio-apps-action@2.0.1
+        with:
+          os: ${{ matrix.os }}
+          command: build
+      - name: Deploy
+        env:
+          AIO_RUNTIME_NAMESPACE: ${{ secrets.AIO_RUNTIME_NAMESPACE_PROD }}
+          AIO_RUNTIME_AUTH: ${{ secrets.AIO_RUNTIME_AUTH_PROD }}
+          AIO_PROJECT_ID: ${{ secrets.AIO_PROJECT_ID_PROD }}
+          AIO_PROJECT_NAME: ${{ secrets.AIO_PROJECT_NAME_PROD }}
+          AIO_PROJECT_ORG_ID: ${{ secrets.AIO_PROJECT_ORG_ID_PROD }}
+          AIO_PROJECT_WORKSPACE_ID: ${{ secrets.AIO_PROJECT_WORKSPACE_ID_PROD }}
+          AIO_PROJECT_WORKSPACE_NAME: ${{ secrets.AIO_PROJECT_WORKSPACE_NAME_PROD }}
+          AIO_PROJECT_WORKSPACE_DETAILS_SERVICES: ${{ secrets.AIO_PROJECT_WORKSPACE_DETAILS_SERVICES_PROD }}
+        uses: adobe/aio-apps-action@2.0.1
+        with:
+          os: ${{ matrix.os }}
+          command: deploy
+          noPublish: false
+```
+
+### For [Extensions](https://www.adobe.io/app-builder/docs/guides/extensions/) OAuth Server-To-Server based
+    Set noPublish flag for Deploy command to true/false to control publishing of Extensions
+```
+name: AIO App CI
+
+on:
+  release:
+    types: [released]
+jobs:
+  deploy:
+    name: Deploy to Prod
+    runs-on: ${{ matrix.os }}
+    strategy:
+      max-parallel: 1
+      matrix:
+        node-version: ['12']
+        os: [ubuntu-latest]
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v2
+      - name: Use Node.js ${{ matrix.node-version }}
+        uses: actions/setup-node@v1
+        with:
+          node-version: ${{ matrix.node-version }}
+      - name: npm install
+        run: npm i
+      - name: Setup CLI
+        uses: adobe/aio-cli-setup-action@1.1.0
+        with:
+          os: ${{ matrix.os }}
+          version: 8.x.x
+      - name: Auth
+        uses: adobe/aio-apps-action@3.0.0
+        with:
+          os: ${{ matrix.os }}
+          command: oauth_sts
+          CLIENTID: ${{ secrets.CLIENTID_PROD }}
+          CLIENTSECRET: ${{ secrets.CLIENTSECRET_PROD }}
+          TECHNICALACCOUNTID: ${{ secrets.TECHNICALACCID_PROD }}
+          TECHNICALACCOUNTEMAIL: ${{ secrets.TECHNICALACCEMAIL_PROD }}
+          IMSORGID: ${{ secrets.IMSORGID_PROD }}
+          SCOPES: ${{ secrets.SCOPES_PROD }}
       - name: Build
         env:
           AIO_RUNTIME_NAMESPACE: ${{ secrets.AIO_RUNTIME_NAMESPACE_PROD }}
