@@ -5,7 +5,7 @@
   "scripts": {
     "lint": "eslint index.js",
     "test": "npm run lint",
-    "package": "./node_modules/@vercel/ncc/dist/ncc/cli.js build index.js -o dist/"
+    "package": "ncc build index.js -o dist/"
   },
   "dependencies": {
     "@actions/core": "^1.2.6",

@@ -9,7 +9,10 @@ This Github action supports following commands
 1) [build](https://github.com/adobe/aio-cli-plugin-app#aio-appbuild) - Builds App Builder application. This is similar to using `aio app build` command using AIO CLI
 2) [test](https://github.com/adobe/aio-cli-plugin-app#aio-apptest) - Test App Builder application. This is similar to using `aio app test` command using AIO CLI
 3) [deploy](https://github.com/adobe/aio-cli-plugin-app#aio-appdeploy) - Deploys App Builder application. This is similar to running `aio app deploy  --skip-build` command using AIO CLI. Deploy Command also supports `--no-publish` flag for `aio app deploy` command to control publishing of Extensions. See usage section for more details.
-4) `auth` - (Deprecated)Generates JWT based IMS Token and adds that to Github Action Environment for AIO CLI to use. The token is required to build and deploy App Builder [Extensions](https://www.adobe.io/app-builder/docs/guides/extensions/).
+4) `auth` - (Deprecated) Generates JWT based IMS Token and adds that to Github Action Environment for AIO CLI to use. The token is required to build and deploy App Builder [Extensions](https://www.adobe.io/app-builder/docs/guides/extensions/).
+    * JWT credential used in this step must have scopes attached that allow interaction with the Extension Registry API and Developer Console API. This can be achieved by adding the **I/O Management API** to the credential in the Developer Console. The appropriate scopes will then be automatically requested and attached to the token generated during this step.
+    - (Optional) If the credential already has scopes attached that allow access to the Extension Registry API and Developer Console API, see the optional **auth** step below for how to configure the custom **SCOPES** variable to request a specific set of scopes.
+ 
 5) `oauth_sts` - Generates OAuth Server-To-Server based IMS Token and adds that to Github Action Environment for AIO CLI to use. The token is required to build and deploy App Builder [Extensions](https://www.adobe.io/app-builder/docs/guides/extensions/).
 
 ## Prerequisites for Commands
@@ -44,9 +47,9 @@ This Github action supports following commands
       2) CLIENTSECRET - Client secret for the Adobe I/O console project
       3) TECHNICALACCOUNTID - Technical account Id for the Adobe I/O console project
       4) IMSORGID - IMS Org Id
-      5) SCOPES - Bracket-enclosed, double-quoted, and comma-separated list of required meta scopes for JWT token
+      5) KEY - Private key associated with project
+      6) (optional) SCOPES - List of meta scopes to request for JWT token
           - Example: `["meta_scope1", "meta_scope2"]`
-      6) KEY - Private key associated with project
 5) `oauth_sts`
       1) CLIENTID - Client id of Adobe I/O console project
       2) CLIENTSECRET - Comma separated String of Client secrets of Adobe I/O console project

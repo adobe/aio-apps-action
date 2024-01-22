@@ -109,7 +109,12 @@ function generateAuthToken() {
   //generate jwt auth
   const key = core.getInput('key')
 
-  const requiredScopes = ["ent_adobeio_sdk"]
+  const scopes = core.getInput('scopes') || ["ent_adobeio_sdk"]
+  const parsedScopes = JSON.parse(scopes)
+
+  if (!Array.isArray(parsedScopes)) {
+    throw new Error('SCOPES environment variable must be an array of strings (e.g. \["ent_adobeio_sdk"\]) to use the auth command')
+  }
 
   const clientId = core.getInput('clientId')
 
@@ -125,7 +130,9 @@ function generateAuthToken() {
     technical_account_id: techAccId,
     ims_org_id: imsOrgId,
     private_key: key.toString(),
-    meta_scopes: requiredScopes
+    meta_scopes: [
+      parsedScopes
+    ]
   }
 
   getAuthToken(imsConfig)
