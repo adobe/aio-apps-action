@@ -34,7 +34,7 @@ This Github action supports following commands
       2) AIO_RUNTIME_AUTH - auth for above namespace
       3) AIO_PROJECT_ID - Adobe I/O Console project ID
       4) AIO_PROJECT_NAME - Adobe I/O Console project name
-      5) AIO_PROJECT_ORG_ID - IMS Org id
+      5) AIO_PROJECT_ORG_ID - AMS Org id (e.g. '53444')
       6) AIO_PROJECT_WORKSPACE_ID - Workspace Id
       7) AIO_PROJECT_WORKSPACE_NAME - Workspace name
       8) AIO_PROJECT_WORKSPACE_DETAILS_SERVICES - list of services added to above workspace in following format (ex. '[{"code": "AdobeIOManagementAPISDK", "name": "I/O Management API"}]' )
