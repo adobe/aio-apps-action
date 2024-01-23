@@ -121,12 +121,12 @@ function generateAuthToken() {
     try {
       parsedScopes = JSON.parse(scopesInput)
     } catch (err) {
-      throw new Error('SCOPES environment variable must be an array of strings (e.g. \["ent_adobeio_sdk"\]) to use the auth command')
+      throw new Error('SCOPES environment variable must be an array of strings (e.g. \["meta_scope_1"\]) to use the auth command')
     }
 
     // If not an array, not valid format
     if (!Array.isArray(parsedScopes)) {
-      throw new Error('SCOPES environment variable must be an array of strings (e.g. \["ent_adobeio_sdk"\]) to use the auth command')
+      throw new Error('SCOPES environment variable must be an array of strings (e.g. \["meta_scope_1"\]) to use the auth command')
     }
     scopes = parsedScopes
   }
