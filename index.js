@@ -111,10 +111,20 @@ function generateAuthToken() {
 
   let scopes = ["ent_adobeio_sdk"]
 
-  // check if custom scopes were configured
+  // check if custom scopes were configured,
+  // must be of format ["ent_adobeio_sdk"]
   const scopesInput = core.getInput('scopes')
+  let parsedScopes
   if (scopesInput) {
-    const parsedScopes = JSON.parse(scopesInput)
+
+    // If JSON parsing fails, not valid format
+    try {
+      parsedScopes = JSON.parse(scopesInput)
+    } catch (err) {
+      throw new Error('SCOPES environment variable must be an array of strings (e.g. \["ent_adobeio_sdk"\]) to use the auth command')
+    }
+
+    // If not an array, not valid format
     if (!Array.isArray(parsedScopes)) {
       throw new Error('SCOPES environment variable must be an array of strings (e.g. \["ent_adobeio_sdk"\]) to use the auth command')
     }
