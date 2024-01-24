@@ -109,7 +109,27 @@ function generateAuthToken() {
   //generate jwt auth
   const key = core.getInput('key')
 
-  const scopes = core.getInput('scopes')
+  let scopes = ["ent_adobeio_sdk"]
+
+  // check if custom scopes were configured,
+  // must be of format ["ent_adobeio_sdk"]
+  const scopesInput = core.getInput('scopes')
+  let parsedScopes
+  if (scopesInput) {
+
+    // If JSON parsing fails, not valid format
+    try {
+      parsedScopes = JSON.parse(scopesInput)
+    } catch (err) {
+      throw new Error('SCOPES environment variable must be an array of strings (e.g. \["meta_scope_1"\]) to use the auth command')
+    }
+
+    // If not an array, not valid format
+    if (!Array.isArray(parsedScopes)) {
+      throw new Error('SCOPES environment variable must be an array of strings (e.g. \["meta_scope_1"\]) to use the auth command')
+    }
+    scopes = parsedScopes
+  }
 
   const clientId = core.getInput('clientId')
 
@@ -136,7 +156,18 @@ function generateAuthToken() {
     setTokenAsEnvVar(res)
   })
   .catch(e => {
-    core.setFailed(e.message)
+    let errorMsg = e.message
+    if(e.error.error === 'invalid_scope') {
+      const scopesErrorMsg = `
+        Invalid scopes requested during auth command. 
+        
+        You may need to add the I/O Management API to your credential using either the Developer Console or the aio CLI (e.g. aio app add service).
+
+        Otherwise, if custom scopes were configured using the SCOPES variable, please ensure that the credential has access to the configured scopes by inspecting the credential in the Developer Console.
+      `
+      errorMsg = scopesErrorMsg
+    }
+    core.setFailed(errorMsg)
   })
 }
 
