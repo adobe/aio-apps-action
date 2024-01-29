@@ -154,7 +154,7 @@ async function generateAuthToken (params = {}) {
     ims_org_id: imsOrgId,
     private_key: key.toString(),
     meta_scopes: [
-      finalScopes
+      ...finalScopes
     ]
   }
 

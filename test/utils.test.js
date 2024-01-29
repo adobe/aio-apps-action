@@ -104,7 +104,7 @@ describe('generateAuthToken', () => {
     const token = 'my-token'
     ims.getToken.mockResolvedValue(token)
     await expect(generateAuthToken(inputs)).resolves.toEqual(token)
-    expect(ims.context.set).toHaveBeenCalledWith('genToken', {}, true)
+    expect(ims.context.set).toHaveBeenCalledWith('genToken', expect.objectContaining({ meta_scopes: ['ent_adobeio_sdk'] }), true)
   })
 
   test('scopes input is not parseable json', async () => {
