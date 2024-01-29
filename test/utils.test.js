@@ -24,9 +24,6 @@ const {
 
 jest.mock('@actions/core', () => ({
   getInput: jest.fn(),
-  // error: jest.fn(),
-  // setOutput: jest.fn(),
-  // info: jest.fn(),
   setFailed: jest.fn(),
   exportVariable: jest.fn(),
   setSecret: jest.fn()
@@ -47,9 +44,6 @@ jest.mock('@adobe/aio-lib-ims', () => ({
 
 beforeEach(() => {
   core.getInput.mockClear()
-  // core.error.mockClear()
-  // core.setOutput.mockClear()
-  // core.info.mockClear()
   core.setFailed.mockClear()
   core.exportVariable.mockClear()
   core.setSecret.mockClear()
