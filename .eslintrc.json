@@ -3,15 +3,19 @@
         "es6": true,
         "node": true
     },
-    "extends": "eslint:recommended",
+    "extends": "@adobe/eslint-config-aio-lib-config",
     "globals": {
         "Atomics": "readonly",
         "SharedArrayBuffer": "readonly"
     },
     "parserOptions": {
-        "ecmaVersion": 2018,
+        "ecmaVersion": "latest",
         "sourceType": "module"
     },
     "rules": {
+        "node/no-unsupported-features/es-syntax": ["error", {
+            "version": ">=18.0.0",
+            "ignores": ["modules"]
+        }]
     }
 }
