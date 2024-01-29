@@ -10,3 +10,22 @@ governing permissions and limitations under the License.
 */
 
 jest.setTimeout(30000)
+
+const { stdout, stderr } = require('stdout-stderr')
+
+// trap console log
+beforeEach(() => {
+  stdout.start()
+  stderr.start()
+  // change this if you need to see logs from stdout
+  stdout.print = false
+})
+
+afterEach(() => {
+  stdout.stop()
+  stderr.stop()
+})
+
+process.on('unhandledRejection', error => {
+  throw error
+})

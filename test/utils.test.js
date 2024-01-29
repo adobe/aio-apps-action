@@ -91,20 +91,72 @@ describe('generateAuthToken', () => {
     await expect(generateAuthToken(inputs)).rejects.toThrow('[generateAuthToken] Validation errors:')
   })
 
-  test('all required inputs available', async () => {
-    const inputs = {
-      ims,
-      key: 'key',
-      clientId: 'client-id',
-      clientSecret: 'client-secret',
-      techAccId: 'tech-acct-id',
-      imsOrgId: 'ims-org-id',
-      scopes: '["ent_adobeio_sdk"]'
-    }
-    const token = 'my-token'
-    ims.getToken.mockResolvedValue(token)
-    await expect(generateAuthToken(inputs)).resolves.toEqual(token)
-    expect(ims.context.set).toHaveBeenCalledWith('genToken', expect.objectContaining({ meta_scopes: ['ent_adobeio_sdk'] }), true)
+  describe('all required inputs available', () => {
+    test('all', async () => {
+      const inputs = {
+        ims,
+        key: 'key',
+        clientId: 'client-id',
+        clientSecret: 'client-secret',
+        techAccId: 'tech-acct-id',
+        imsOrgId: 'ims-org-id',
+        scopes: '["ent_adobeio_sdk"]'
+      }
+      const token = 'my-token'
+      ims.getToken.mockResolvedValue(token)
+      await expect(generateAuthToken(inputs)).resolves.toEqual(token)
+      expect(ims.context.set).toHaveBeenCalledWith('genToken', expect.objectContaining({ meta_scopes: ['ent_adobeio_sdk'] }), true)
+    })
+
+    test('default scope input', async () => {
+      const inputs = {
+        ims,
+        key: 'key',
+        clientId: 'client-id',
+        clientSecret: 'client-secret',
+        techAccId: 'tech-acct-id',
+        imsOrgId: 'ims-org-id'
+      }
+      const token = 'my-token'
+      ims.getToken.mockResolvedValue(token)
+      await expect(generateAuthToken(inputs)).resolves.toEqual(token)
+      expect(ims.context.set).toHaveBeenCalledWith('genToken', expect.objectContaining({ meta_scopes: ['ent_adobeio_sdk'] }), true)
+    })
+
+    test('scope input value is unknown', async () => {
+      const inputs = {
+        ims,
+        key: 'key',
+        clientId: 'client-id',
+        clientSecret: 'client-secret',
+        techAccId: 'tech-acct-id',
+        imsOrgId: 'ims-org-id',
+        scopes: '["some_unknown_scope"]'
+      }
+
+      ims.getToken.mockRejectedValue({
+        error: {
+          error: 'invalid_scope'
+        }
+      })
+      await expect(generateAuthToken(inputs)).rejects.toThrow('Invalid scopes requested during auth command')
+    })
+
+    test('coverage: ims.getToken non invalid-scope error', async () => {
+      const inputs = {
+        ims,
+        key: 'key',
+        clientId: 'client-id',
+        clientSecret: 'client-secret',
+        techAccId: 'tech-acct-id',
+        imsOrgId: 'ims-org-id',
+        scopes: '["ent_adobeio_sdk"]'
+      }
+
+      const errorMessage = 'some IMS error'
+      ims.getToken.mockRejectedValue({ message: errorMessage })
+      await expect(generateAuthToken(inputs)).rejects.toThrow(errorMessage)
+    })
   })
 
   test('scopes input is not parseable json', async () => {

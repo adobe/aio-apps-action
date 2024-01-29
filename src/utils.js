@@ -119,7 +119,7 @@ async function generateAuthToken (params = {}) {
       imsOrgId: { type: 'string' },
       scopes: { type: 'string' }
     },
-    required: ['key', 'clientId', 'clientSecret', 'techAccId', 'imsOrgId', 'scopes']
+    required: ['key', 'clientId', 'clientSecret', 'techAccId', 'imsOrgId']
   }
 
   const { valid, errors } = validate(schema, params)
@@ -173,7 +173,8 @@ async function getAuthToken (ims, imsConfig) {
     console.log('getting token from ims')
     await ims.context.set('genToken', imsConfig, true)
     console.log('getting token from ims...')
-    return ims.getToken('genToken')
+    const token = await ims.getToken('genToken')
+    return token
   } catch (e) {
     let errorMsg = e.message
     if (e.error?.error === 'invalid_scope') {
