@@ -82,10 +82,15 @@ async function generateOAuthSTSAuthToken (params = {}) {
   const finalScopes = scopes
     ? scopes.split(',')
     : [
-        'AdobeID',
-        'openid',
-        'adobeio_api',
-        'read_client_secret'
+        // Scopes granted by I/O Management API
+        'AdobeID', 
+        'openid', 
+        'read_organizations', 
+        'additional_info.projectedProductContext', 
+        'additional_info.roles', 
+        'adobeio_api', 
+        'read_client_secret', 
+        'manage_client_secrets'
       ]
 
   // generate oauth sts auth token
