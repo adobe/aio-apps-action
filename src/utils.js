@@ -83,13 +83,13 @@ async function generateOAuthSTSAuthToken (params = {}) {
     ? scopes.split(',')
     : [
         // Scopes granted by I/O Management API
-        'AdobeID', 
-        'openid', 
-        'read_organizations', 
-        'additional_info.projectedProductContext', 
-        'additional_info.roles', 
-        'adobeio_api', 
-        'read_client_secret', 
+        'AdobeID',
+        'openid',
+        'read_organizations',
+        'additional_info.projectedProductContext',
+        'additional_info.roles',
+        'adobeio_api',
+        'read_client_secret',
         'manage_client_secrets'
       ]
 
