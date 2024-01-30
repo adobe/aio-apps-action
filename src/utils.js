@@ -71,13 +71,22 @@ async function generateOAuthSTSAuthToken (params = {}) {
       techAccEmail: { type: 'string' },
       imsOrgId: { type: 'string' }
     },
-    required: ['scopes', 'clientId', 'clientSecret', 'techAccId', 'techAccEmail', 'imsOrgId']
+    required: ['clientId', 'clientSecret', 'techAccId', 'techAccEmail', 'imsOrgId']
   }
 
   const { valid, errors } = validate(schema, params)
   if (!valid) {
     throw new Error(`[generateOAuthSTSAuthToken] Validation errors: ${JSON.stringify(errors, null, 2)}`)
   }
+
+  const finalScopes = scopes
+    ? scopes.split(',')
+    : [
+        'AdobeID',
+        'openid',
+        'adobeio_api',
+        'read_client_secret'
+      ]
 
   // generate oauth sts auth token
   console.log('Trying to generate oauth sts token')
@@ -88,7 +97,9 @@ async function generateOAuthSTSAuthToken (params = {}) {
     technical_account_email: techAccEmail,
     technical_account_id: techAccId,
     ims_org_id: imsOrgId,
-    scopes: scopes.split(',')
+    scopes: [
+      ...finalScopes
+    ]
   }
   return getAuthToken(ims, imsContextConfig)
 }

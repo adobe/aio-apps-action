@@ -14,6 +14,8 @@ This Github action supports following commands
     - (Optional) If the credential already has scopes attached that allow access to the Extension Registry API and Developer Console API, see the optional **auth** step below for how to configure the custom **SCOPES** variable to request a specific set of scopes.
  
 5) `oauth_sts` - Generates OAuth Server-To-Server based IMS Token and adds that to Github Action Environment for AIO CLI to use. The token is required to build and deploy App Builder [Extensions](https://www.adobe.io/app-builder/docs/guides/extensions/).
+    * OAuth Credential used in this step must have scopes attached that allow interaction with the Extension Registry API and Developer Console API. This can be achieved by adding the **I/O Management API** to the credential in the Developer Console. The appropriate scopes will then be automatically requested and attached to the token generated during this step.
+    - (Optional) If the credential already has scopes attached that allow access to the Extension Registry API and Developer Console API, see the optional **oauth_sts** step below for how to configure the custom **SCOPES** variable to request a specific set of scopes.
 
 ## Prerequisites for Commands
 
@@ -56,7 +58,7 @@ This Github action supports following commands
       3) TECHNICALACCOUNTID - Technical account Id of Adobe I/O console project
       4) TECHNICALACCOUNTEMAIL -  Technical account email of Adobe I/O console project
       5) IMSORGID - IMS Org Id
-      6) SCOPES - comma-separated list of scopes for OAuth Server-To-Server Credentials
+      6) (optional) SCOPES - comma-separated list of scopes for OAuth Server-To-Server Credentials
           - Example: `AdobeID, openid, read_organizations`
 
 ## Command Usage and required params

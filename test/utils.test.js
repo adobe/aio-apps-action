@@ -198,6 +198,33 @@ describe('generateOAuthSTSAuthToken', () => {
     await expect(generateOAuthSTSAuthToken(inputs)).rejects.toThrow('[generateOAuthSTSAuthToken] Validation errors:')
   })
 
+  test('use default scopes', async () => {
+    const inputs = {
+      ims,
+      key: 'key',
+      clientId: 'client-id',
+      clientSecret: 'client-secret',
+      techAccId: 'tech-acct-id',
+      techAccEmail: 'tech-acct-email',
+      imsOrgId: 'ims-org-id'
+    }
+    const token = 'my-token'
+    ims.getToken.mockResolvedValue(token)
+    await expect(generateOAuthSTSAuthToken(inputs)).resolves.toEqual(token)
+    expect(ims.context.set).toHaveBeenCalledWith('genToken', expect.objectContaining({
+      scopes: [
+        'AdobeID',
+        'openid',
+        'read_organizations',
+        'additional_info.projectedProductContext',
+        'additional_info.roles',
+        'adobeio_api',
+        'read_client_secret',
+        'manage_client_secrets'
+      ]
+    }), true)
+  })
+
   test('all required inputs available', async () => {
     const inputs = {
       ims,
