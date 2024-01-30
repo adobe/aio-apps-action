@@ -114361,9 +114361,7 @@ async function generateOAuthSTSAuthToken (params = {}) {
   const schema = {
     type: 'object',
     properties: {
-      // (Need the \s for spaces in the regex)
-      // eslint-disable-next-line no-useless-escape
-      scopes: { type: 'string', pattern: '^([a-zA-Z0-9_.\s]+,)*([a-zA-Z0-9_.\s]+){1}' }, // Comma-separated string with or without spaces
+      scopes: { type: 'string' },
       clientId: { type: 'string' },
       clientSecret: { type: 'string' },
       techAccId: { type: 'string' },
@@ -114383,12 +114381,8 @@ async function generateOAuthSTSAuthToken (params = {}) {
     : [
         'AdobeID',
         'openid',
-        'read_organizations',
-        'additional_info.projectedProductContext',
-        'additional_info.roles',
         'adobeio_api',
-        'read_client_secret',
-        'manage_client_secrets'
+        'read_client_secret'
       ]
 
   // generate oauth sts auth token
