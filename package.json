@@ -3,7 +3,7 @@
   "version": "2.0.2",
   "description": "GitHub Action to Build, Test and Deploy AIO Apps",
   "scripts": {
-    "lint": "eslint src test --fix",
+    "lint": "eslint src test",
     "test": "npm run unit-tests && npm run lint && npm run package",
     "unit-tests": "jest -c jest.config.js",
     "package": "ncc build src/index.js -o dist/"
