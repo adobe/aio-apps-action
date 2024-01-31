@@ -3,7 +3,7 @@
   "version": "2.0.2",
   "description": "GitHub Action to Build, Test and Deploy AIO Apps",
   "scripts": {
-    "lint": "eslint src test",
+    "lint": "eslint src test --fix",
     "test": "npm run unit-tests && npm run lint && npm run package",
     "unit-tests": "jest -c jest.config.js",
     "package": "ncc build src/index.js -o dist/"
@@ -12,7 +12,8 @@
     "@actions/core": "^1.2.6",
     "@actions/exec": "^1.0.4",
     "@adobe/aio-lib-ims": "7.0.0",
-    "ajv": "^8.12.0"
+    "ajv": "^8.12.0",
+    "ajv-errors": "^3.0.0"
   },
   "devDependencies": {
     "@adobe/eslint-config-aio-lib-config": "^2.0.2",

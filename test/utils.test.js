@@ -198,7 +198,21 @@ describe('generateOAuthSTSAuthToken', () => {
     await expect(generateOAuthSTSAuthToken(inputs)).rejects.toThrow('[generateOAuthSTSAuthToken] Validation errors:')
   })
 
-  test('all required inputs available', async () => {
+  test('invalid scope format', async () => {
+    const inputs = {
+      ims,
+      key: 'key',
+      clientId: 'client-id',
+      clientSecret: 'client-secret',
+      techAccId: 'tech-acct-id',
+      techAccEmail: 'tech-acct-email',
+      imsOrgId: 'ims-org-id',
+      scopes: '[scope1, scope2]'
+    }
+    await expect(generateOAuthSTSAuthToken(inputs)).rejects.toThrow('[generateOAuthSTSAuthToken] Validation errors:')
+  })
+
+  test('invalid scope format, deprecated jwt', async () => {
     const inputs = {
       ims,
       key: 'key',
@@ -208,6 +222,52 @@ describe('generateOAuthSTSAuthToken', () => {
       techAccEmail: 'tech-acct-email',
       imsOrgId: 'ims-org-id',
       scopes: '["ent_adobeio_sdk"]'
+    }
+    await expect(generateOAuthSTSAuthToken(inputs)).rejects.toThrow('[generateOAuthSTSAuthToken] Validation errors:')
+  })
+
+  test('all required inputs available, no spaces between scopes', async () => {
+    const inputs = {
+      ims,
+      key: 'key',
+      clientId: 'client-id',
+      clientSecret: 'client-secret',
+      techAccId: 'tech-acct-id',
+      techAccEmail: 'tech-acct-email',
+      imsOrgId: 'ims-org-id',
+      scopes: 'scope1,scope2'
+    }
+    const token = 'my-token'
+    ims.getToken.mockResolvedValue(token)
+    await expect(generateOAuthSTSAuthToken(inputs)).resolves.toEqual(token)
+  })
+
+  test('all required inputs available, additional accepted chars in scopes', async () => {
+    const inputs = {
+      ims,
+      key: 'key',
+      clientId: 'client-id',
+      clientSecret: 'client-secret',
+      techAccId: 'tech-acct-id',
+      techAccEmail: 'tech-acct-email',
+      imsOrgId: 'ims-org-id',
+      scopes: 'scope_1, scope2.projectedContext'
+    }
+    const token = 'my-token'
+    ims.getToken.mockResolvedValue(token)
+    await expect(generateOAuthSTSAuthToken(inputs)).resolves.toEqual(token)
+  })
+
+  test('all required inputs available', async () => {
+    const inputs = {
+      ims,
+      key: 'key',
+      clientId: 'client-id',
+      clientSecret: 'client-secret',
+      techAccId: 'tech-acct-id',
+      techAccEmail: 'tech-acct-email',
+      imsOrgId: 'ims-org-id',
+      scopes: 'scope1, scope2'
     }
     const token = 'my-token'
     ims.getToken.mockResolvedValue(token)
