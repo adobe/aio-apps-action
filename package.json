@@ -12,7 +12,8 @@
     "@actions/core": "^1.2.6",
     "@actions/exec": "^1.0.4",
     "@adobe/aio-lib-ims": "7.0.0",
-    "ajv": "^8.12.0"
+    "ajv": "^8.12.0",
+    "ajv-errors": "^3.0.0"
   },
   "devDependencies": {
     "@adobe/eslint-config-aio-lib-config": "^2.0.2",
