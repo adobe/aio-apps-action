@@ -11,6 +11,7 @@ governing permissions and limitations under the License.
 */
 
 const Ajv = require('ajv')
+const AjvErrors = require('ajv-errors')
 
 /**
  * Validates json according to a schema.
@@ -22,6 +23,7 @@ const Ajv = require('ajv')
  */
 function validate (schema, data) {
   const ajv = new Ajv({ allErrors: true })
+  AjvErrors(ajv)
   const validate = ajv.compile(schema)
   const valid = validate(data)
 
@@ -64,7 +66,13 @@ async function generateOAuthSTSAuthToken (params = {}) {
   const schema = {
     type: 'object',
     properties: {
-      scopes: { type: 'string' },
+      scopes: {
+        type: 'string',
+        // The escaped \s is needed to allow spaces
+        // eslint-disable-next-line no-useless-escape
+        pattern: '^[0-9a-zA-Z_.\s]+(,[0-9a-zA-Z_.\s]+)*', // Example: scope1, scope2, scope3. or scope1,scope2,scope3.
+        errorMessage: 'Invalid scopes format. Must be a comma separated list of scopes (e.g. scope1, scope2, scope3 or scope1,scope2,scope3)'
+      },
       clientId: { type: 'string' },
       clientSecret: { type: 'string' },
       techAccId: { type: 'string' },
