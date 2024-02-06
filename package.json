@@ -17,7 +17,7 @@
     "ajv-errors": "^3.0.0"
   },
   "devDependencies": {
-    "@adobe/eslint-config-aio-lib-config": "^2.0.2",
+    "@adobe/eslint-config-aio-lib-config": "^3.0.0",
     "@vercel/ncc": "^0.38.1",
     "eslint": "^8.56.0",
     "eslint-config-standard": "^17.1.0",
