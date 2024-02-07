@@ -78,26 +78,26 @@ jobs:
     strategy:
       max-parallel: 1
       matrix:
-        node-version: ['12']
+        node-version: ['20']
         os: [ubuntu-latest]
     steps:
       - name: Checkout
-        uses: actions/checkout@v2
+        uses: actions/checkout@v4
       - name: Use Node.js ${{ matrix.node-version }}
-        uses: actions/setup-node@v1
+        uses: actions/setup-node@v4
         with:
           node-version: ${{ matrix.node-version }}
       - name: npm install
         run: npm i
       - name: Setup CLI
-        uses: adobe/aio-cli-setup-action@1.1.0
+        uses: adobe/aio-cli-setup-action@1.3.0
         with:
           os: ${{ matrix.os }}
-          version: 8.x.x
+          version: 10.x.x
       - name: Build
         env:
           AIO_RUNTIME_NAMESPACE: ${{ secrets.AIO_RUNTIME_NAMESPACE_PROD }}
-        uses: adobe/aio-apps-action@2.0.1
+        uses: adobe/aio-apps-action@3.3.0
         with:
           os: ${{ matrix.os }}
           command: build
@@ -105,7 +105,7 @@ jobs:
         env:
           AIO_RUNTIME_NAMESPACE: ${{ secrets.AIO_RUNTIME_NAMESPACE_PROD }}
           AIO_RUNTIME_AUTH: ${{ secrets.AIO_RUNTIME_AUTH_PROD }}
-        uses: adobe/aio-apps-action@2.0.1
+        uses: adobe/aio-apps-action@3.3.0
         with:
           os: ${{ matrix.os }}
           command: deploy
@@ -126,24 +126,24 @@ jobs:
     strategy:
       max-parallel: 1
       matrix:
-        node-version: ['12']
+        node-version: ['20']
         os: [ubuntu-latest]
     steps:
       - name: Checkout
-        uses: actions/checkout@v2
+        uses: actions/checkout@v4
       - name: Use Node.js ${{ matrix.node-version }}
-        uses: actions/setup-node@v1
+        uses: actions/setup-node@v4
         with:
           node-version: ${{ matrix.node-version }}
       - name: npm install
         run: npm i
       - name: Setup CLI
-        uses: adobe/aio-cli-setup-action@1.1.0
+        uses: adobe/aio-cli-setup-action@1.3.0
         with:
           os: ${{ matrix.os }}
-          version: 8.x.x
+          version: 10.x.x
       - name: Auth
-        uses: adobe/aio-apps-action@2.0.1
+        uses: adobe/aio-apps-action@3.3.0
         with:
           os: ${{ matrix.os }}
           command: auth
@@ -155,7 +155,7 @@ jobs:
       - name: Build
         env:
           AIO_RUNTIME_NAMESPACE: ${{ secrets.AIO_RUNTIME_NAMESPACE_PROD }}
-        uses: adobe/aio-apps-action@2.0.1
+        uses: adobe/aio-apps-action@3.3.0
         with:
           os: ${{ matrix.os }}
           command: build
@@ -169,7 +169,7 @@ jobs:
           AIO_PROJECT_WORKSPACE_ID: ${{ secrets.AIO_PROJECT_WORKSPACE_ID_PROD }}
           AIO_PROJECT_WORKSPACE_NAME: ${{ secrets.AIO_PROJECT_WORKSPACE_NAME_PROD }}
           AIO_PROJECT_WORKSPACE_DETAILS_SERVICES: ${{ secrets.AIO_PROJECT_WORKSPACE_DETAILS_SERVICES_PROD }}
-        uses: adobe/aio-apps-action@2.0.1
+        uses: adobe/aio-apps-action@3.3.0
         with:
           os: ${{ matrix.os }}
           command: deploy
@@ -191,24 +191,24 @@ jobs:
     strategy:
       max-parallel: 1
       matrix:
-        node-version: ['12']
+        node-version: ['20']
         os: [ubuntu-latest]
     steps:
       - name: Checkout
-        uses: actions/checkout@v2
+        uses: actions/checkout@v4
       - name: Use Node.js ${{ matrix.node-version }}
-        uses: actions/setup-node@v1
+        uses: actions/setup-node@v4
         with:
           node-version: ${{ matrix.node-version }}
       - name: npm install
         run: npm i
       - name: Setup CLI
-        uses: adobe/aio-cli-setup-action@1.1.0
+        uses: adobe/aio-cli-setup-action@1.3.0
         with:
           os: ${{ matrix.os }}
-          version: 8.x.x
+          version: 10.x.x
       - name: Auth
-        uses: adobe/aio-apps-action@3.0.0
+        uses: adobe/aio-apps-action@3.3.0
         with:
           os: ${{ matrix.os }}
           command: oauth_sts
@@ -221,7 +221,7 @@ jobs:
       - name: Build
         env:
           AIO_RUNTIME_NAMESPACE: ${{ secrets.AIO_RUNTIME_NAMESPACE_PROD }}
-        uses: adobe/aio-apps-action@2.0.1
+        uses: adobe/aio-apps-action@3.3.0
         with:
           os: ${{ matrix.os }}
           command: build
@@ -235,7 +235,7 @@ jobs:
           AIO_PROJECT_WORKSPACE_ID: ${{ secrets.AIO_PROJECT_WORKSPACE_ID_PROD }}
           AIO_PROJECT_WORKSPACE_NAME: ${{ secrets.AIO_PROJECT_WORKSPACE_NAME_PROD }}
           AIO_PROJECT_WORKSPACE_DETAILS_SERVICES: ${{ secrets.AIO_PROJECT_WORKSPACE_DETAILS_SERVICES_PROD }}
-        uses: adobe/aio-apps-action@2.0.1
+        uses: adobe/aio-apps-action@3.3.0
         with:
           os: ${{ matrix.os }}
           command: deploy
