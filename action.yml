@@ -1,7 +1,7 @@
 name: 'AIO Apps'
 description: 'Build, Test and Deploy AIO Apps'
 runs:
-  using: 'node12'
+  using: 'node20'
   main: 'dist/index.js'
 inputs: 
   os: 
