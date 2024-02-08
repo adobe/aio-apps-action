@@ -3,3 +3,24 @@ description: 'Build, Test and Deploy AIO Apps'
 runs:
   using: 'node20'
   main: 'dist/index.js'
+inputs: 
+  os: 
+    description: 'Operating System'
+    required: true
+  command:
+    description: 'Command'
+    required: true
+  CLIENTID:
+    description: 'IMS Client ID'
+  CLIENTSECRET: 
+    description: 'IMS Client Secret'
+  TECHNICALACCOUNTID:
+    description: 'IMS Technical Account ID'
+  TECHNICALACCOUNTEMAIL:
+    description: 'IMS Technical Account Email'
+  IMSORGID:
+    description: 'IMS Org ID'
+  SCOPES:
+    description: 'IMS Scopes'
+  KEY: 
+    description: '(Deprecated) JWT Private Key'
