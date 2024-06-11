@@ -111391,15 +111391,7 @@ async function main () {
   const command = core.getInput('command')
   const noPublish = core.getInput('noPublish')
   const key = core.getInput('key')
-  const scopes = core.getInput('scopes')
-  const test = core.getInput('doesnt-exist')
-  const testObj = { 
-    test
-  }
-  console.log('testObj', JSON.stringify(testObj))
-  console.log('test input', test)
-  console.log('test input === undefined', test === undefined)
-  console.log('test input === null', test === null)
+  const scopes = core.getInput('scopes') || undefined
   const clientId = core.getInput('clientId')
   const clientSecret = core.getInput('clientSecret')
   const techAccId = core.getInput('technicalAccountId')
