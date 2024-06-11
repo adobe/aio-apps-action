@@ -146,6 +146,12 @@ async function generateAuthToken (params = {}) {
     required: ['key', 'clientId', 'clientSecret', 'techAccId', 'imsOrgId']
   }
 
+  console.log('params keys', Object.keys(params))
+  console.log('params', JSON.stringify(params))
+  console.log('params.scopes', params.scopes) 
+  console.log('params.scopes === undefined', params.scope=s === undefined) 
+  console.log('params.scopes === null', params.scopes === null)
+
   const { valid, errors } = validate(schema, params)
   if (!valid) {
     throw new Error(`[generateAuthToken] Validation errors: ${JSON.stringify(errors, null, 2)}`)
