@@ -111559,6 +111559,12 @@ async function generateOAuthSTSAuthToken (params = {}) {
     required: ['clientId', 'clientSecret', 'techAccId', 'techAccEmail', 'imsOrgId']
   }
 
+  console.log('params keys', Object.keys(params))
+  console.log('params', params)
+  console.log('params.scopes', params.scopes)
+  console.log('params.scopes === undefined', params.scopes === undefined)
+  console.log('params.scopes === null', params.scopes === null)
+
   const { valid, errors } = validate(schema, params)
   if (!valid) {
     throw new Error(`[generateOAuthSTSAuthToken] Validation errors: ${JSON.stringify(errors, null, 2)}`)
