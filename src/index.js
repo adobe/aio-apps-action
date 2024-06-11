@@ -32,6 +32,8 @@ async function main () {
   const noPublish = core.getInput('noPublish')
   const key = core.getInput('key')
   const scopes = core.getInput('scopes')
+  const test = core.getInput('doesnt-exist')
+  console.log('test input', test)
   const clientId = core.getInput('clientId')
   const clientSecret = core.getInput('clientSecret')
   const techAccId = core.getInput('technicalAccountId')
