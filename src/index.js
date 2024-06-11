@@ -33,8 +33,13 @@ async function main () {
   const key = core.getInput('key')
   const scopes = core.getInput('scopes')
   const test = core.getInput('doesnt-exist')
+  const testObj = { 
+    test
+  }
+  console.log('testObj', JSON.stringify(testObj))
   console.log('test input', test)
-  console.log('test commit')
+  console.log('test input === undefined', test === undefined)
+  console.log('test input === null', test === null)
   const clientId = core.getInput('clientId')
   const clientSecret = core.getInput('clientSecret')
   const techAccId = core.getInput('technicalAccountId')
