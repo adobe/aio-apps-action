@@ -31,7 +31,7 @@ async function main () {
   const command = core.getInput('command')
   const noPublish = core.getInput('noPublish')
   const key = core.getInput('key')
-  const scopes = core.getInput('scopes')
+  const scopes = core.getInput('scopes') || undefined
   const clientId = core.getInput('clientId')
   const clientSecret = core.getInput('clientSecret')
   const techAccId = core.getInput('technicalAccountId')

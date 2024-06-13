@@ -198,6 +198,20 @@ describe('generateOAuthSTSAuthToken', () => {
     await expect(generateOAuthSTSAuthToken(inputs)).rejects.toThrow('[generateOAuthSTSAuthToken] Validation errors:')
   })
 
+  test('scopes is an empty string', async () => {
+    const inputs = {
+      ims,
+      key: 'key',
+      clientId: 'client-id',
+      clientSecret: 'client-secret',
+      techAccId: 'tech-acct-id',
+      techAccEmail: 'tech-acct-email',
+      imsOrgId: 'ims-org-id',
+      scopes: ''
+    }
+    await expect(generateOAuthSTSAuthToken(inputs)).rejects.toThrow('[generateOAuthSTSAuthToken] Validation errors:')
+  })
+
   test('use default scopes', async () => {
     const inputs = {
       ims,
