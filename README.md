@@ -177,7 +177,7 @@ jobs:
 ```
 
 ### For [Extensions](https://www.adobe.io/app-builder/docs/guides/extensions/) OAuth Server-To-Server based
-    Set noPublish flag for Deploy command to true/false to control publishing of Extensions
+    Set noPublish flag for Deploy command to true/false to control publishing of Extensions. Set forceDeploy flag to true to force deploy the Extension.
 ```
 name: AIO App CI
 
