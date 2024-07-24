@@ -9461,7 +9461,7 @@ class HttpsProxyAgent extends agent_base_1.Agent {
             const servername = this.connectOpts.servername || this.connectOpts.host;
             socket = tls.connect({
                 ...this.connectOpts,
-                servername: servername && net.isIP(servername) ? undefined : servername,
+                servername,
             });
         }
         else {
@@ -9502,7 +9502,7 @@ class HttpsProxyAgent extends agent_base_1.Agent {
                 return tls.connect({
                     ...omit(opts, 'host', 'path', 'port'),
                     socket,
-                    servername: net.isIP(servername) ? undefined : servername,
+                    servername,
                 });
             }
             return socket;
@@ -24690,6 +24690,7 @@ Object.defineProperty(exports, "MissingRefError", ({ enumerable: true, get: func
 
 Object.defineProperty(exports, "__esModule", ({ value: true }));
 exports.regexpCode = exports.getEsmExportName = exports.getProperty = exports.safeStringify = exports.stringify = exports.strConcat = exports.addCodeArg = exports.str = exports._ = exports.nil = exports._Code = exports.Name = exports.IDENTIFIER = exports._CodeOrName = void 0;
+// eslint-disable-next-line @typescript-eslint/no-extraneous-class
 class _CodeOrName {
 }
 exports._CodeOrName = _CodeOrName;
@@ -28269,7 +28270,7 @@ ucs2length.code = 'require("ajv/dist/runtime/ucs2length").default';
 "use strict";
 
 Object.defineProperty(exports, "__esModule", ({ value: true }));
-const uri = __nccwpck_require__(70020);
+const uri = __nccwpck_require__(49688);
 uri.code = 'require("ajv/dist/runtime/uri").default';
 exports["default"] = uri;
 //# sourceMappingURL=uri.js.map
@@ -52673,10 +52674,13 @@ internals.errors = function (failures, { error, state }) {
         const [type, code] = report.code.split('.');
         if (code !== 'base') {
             complex.push({ type: schema.type, report });
-            continue;
         }
-
-        valids.add(type);
+        else if (report.code === 'object.base') {
+            valids.add(report.local.type);
+        }
+        else {
+            valids.add(type);
+        }
     }
 
     // All errors are base types or valids
@@ -54354,7 +54358,7 @@ module.exports = Any.extend({
 
     flags: {
 
-        unknown: { default: false }
+        unknown: { default: undefined }
     },
 
     terms: {
@@ -55295,7 +55299,7 @@ internals.unknown = function (schema, value, unprocessed, errors, state, prefs) 
         return;
     }
 
-    if (prefs.stripUnknown && !schema._flags.unknown ||
+    if (prefs.stripUnknown && typeof schema._flags.unknown === 'undefined' ||
         prefs.skipFunctions) {
 
         const stripUnknown = prefs.stripUnknown ? (prefs.stripUnknown === true ? true : !!prefs.stripUnknown.objects) : false;
@@ -62688,6 +62692,8 @@ const Range = __nccwpck_require__(34502)
 /***/ 34502:
 /***/ ((module, __unused_webpack_exports, __nccwpck_require__) => {
 
+const SPACE_CHARACTERS = /\s+/g
+
 // hoisted class for cyclic dependency
 class Range {
   constructor (range, options) {
@@ -62708,7 +62714,7 @@ class Range {
       // just put it in the set and return
       this.raw = range.value
       this.set = [[range]]
-      this.format()
+      this.formatted = undefined
       return this
     }
 
@@ -62719,10 +62725,7 @@ class Range {
     // First reduce all whitespace as much as possible so we do not have to rely
     // on potentially slow regexes like \s*. This is then stored and used for
     // future error messages as well.
-    this.raw = range
-      .trim()
-      .split(/\s+/)
-      .join(' ')
+    this.raw = range.trim().replace(SPACE_CHARACTERS, ' ')
 
     // First, split on ||
     this.set = this.raw
@@ -62756,14 +62759,29 @@ class Range {
       }
     }
 
-    this.format()
+    this.formatted = undefined
+  }
+
+  get range () {
+    if (this.formatted === undefined) {
+      this.formatted = ''
+      for (let i = 0; i < this.set.length; i++) {
+        if (i > 0) {
+          this.formatted += '||'
+        }
+        const comps = this.set[i]
+        for (let k = 0; k < comps.length; k++) {
+          if (k > 0) {
+            this.formatted += ' '
+          }
+          this.formatted += comps[k].toString().trim()
+        }
+      }
+    }
+    return this.formatted
   }
 
   format () {
-    this.range = this.set
-      .map((comps) => comps.join(' ').trim())
-      .join('||')
-      .trim()
     return this.range
   }
 
@@ -102963,1455 +102981,6 @@ for (name in extraFunctions) {
 
 /***/ }),
 
-/***/ 70020:
-/***/ (function(__unused_webpack_module, exports) {
-
-/** @license URI.js v4.4.1 (c) 2011 Gary Court. License: http://github.com/garycourt/uri-js */
-(function (global, factory) {
-	 true ? factory(exports) :
-	0;
-}(this, (function (exports) { 'use strict';
-
-function merge() {
-    for (var _len = arguments.length, sets = Array(_len), _key = 0; _key < _len; _key++) {
-        sets[_key] = arguments[_key];
-    }
-
-    if (sets.length > 1) {
-        sets[0] = sets[0].slice(0, -1);
-        var xl = sets.length - 1;
-        for (var x = 1; x < xl; ++x) {
-            sets[x] = sets[x].slice(1, -1);
-        }
-        sets[xl] = sets[xl].slice(1);
-        return sets.join('');
-    } else {
-        return sets[0];
-    }
-}
-function subexp(str) {
-    return "(?:" + str + ")";
-}
-function typeOf(o) {
-    return o === undefined ? "undefined" : o === null ? "null" : Object.prototype.toString.call(o).split(" ").pop().split("]").shift().toLowerCase();
-}
-function toUpperCase(str) {
-    return str.toUpperCase();
-}
-function toArray(obj) {
-    return obj !== undefined && obj !== null ? obj instanceof Array ? obj : typeof obj.length !== "number" || obj.split || obj.setInterval || obj.call ? [obj] : Array.prototype.slice.call(obj) : [];
-}
-function assign(target, source) {
-    var obj = target;
-    if (source) {
-        for (var key in source) {
-            obj[key] = source[key];
-        }
-    }
-    return obj;
-}
-
-function buildExps(isIRI) {
-    var ALPHA$$ = "[A-Za-z]",
-        CR$ = "[\\x0D]",
-        DIGIT$$ = "[0-9]",
-        DQUOTE$$ = "[\\x22]",
-        HEXDIG$$ = merge(DIGIT$$, "[A-Fa-f]"),
-        //case-insensitive
-    LF$$ = "[\\x0A]",
-        SP$$ = "[\\x20]",
-        PCT_ENCODED$ = subexp(subexp("%[EFef]" + HEXDIG$$ + "%" + HEXDIG$$ + HEXDIG$$ + "%" + HEXDIG$$ + HEXDIG$$) + "|" + subexp("%[89A-Fa-f]" + HEXDIG$$ + "%" + HEXDIG$$ + HEXDIG$$) + "|" + subexp("%" + HEXDIG$$ + HEXDIG$$)),
-        //expanded
-    GEN_DELIMS$$ = "[\\:\\/\\?\\#\\[\\]\\@]",
-        SUB_DELIMS$$ = "[\\!\\$\\&\\'\\(\\)\\*\\+\\,\\;\\=]",
-        RESERVED$$ = merge(GEN_DELIMS$$, SUB_DELIMS$$),
-        UCSCHAR$$ = isIRI ? "[\\xA0-\\u200D\\u2010-\\u2029\\u202F-\\uD7FF\\uF900-\\uFDCF\\uFDF0-\\uFFEF]" : "[]",
-        //subset, excludes bidi control characters
-    IPRIVATE$$ = isIRI ? "[\\uE000-\\uF8FF]" : "[]",
-        //subset
-    UNRESERVED$$ = merge(ALPHA$$, DIGIT$$, "[\\-\\.\\_\\~]", UCSCHAR$$),
-        SCHEME$ = subexp(ALPHA$$ + merge(ALPHA$$, DIGIT$$, "[\\+\\-\\.]") + "*"),
-        USERINFO$ = subexp(subexp(PCT_ENCODED$ + "|" + merge(UNRESERVED$$, SUB_DELIMS$$, "[\\:]")) + "*"),
-        DEC_OCTET$ = subexp(subexp("25[0-5]") + "|" + subexp("2[0-4]" + DIGIT$$) + "|" + subexp("1" + DIGIT$$ + DIGIT$$) + "|" + subexp("[1-9]" + DIGIT$$) + "|" + DIGIT$$),
-        DEC_OCTET_RELAXED$ = subexp(subexp("25[0-5]") + "|" + subexp("2[0-4]" + DIGIT$$) + "|" + subexp("1" + DIGIT$$ + DIGIT$$) + "|" + subexp("0?[1-9]" + DIGIT$$) + "|0?0?" + DIGIT$$),
-        //relaxed parsing rules
-    IPV4ADDRESS$ = subexp(DEC_OCTET_RELAXED$ + "\\." + DEC_OCTET_RELAXED$ + "\\." + DEC_OCTET_RELAXED$ + "\\." + DEC_OCTET_RELAXED$),
-        H16$ = subexp(HEXDIG$$ + "{1,4}"),
-        LS32$ = subexp(subexp(H16$ + "\\:" + H16$) + "|" + IPV4ADDRESS$),
-        IPV6ADDRESS1$ = subexp(subexp(H16$ + "\\:") + "{6}" + LS32$),
-        //                           6( h16 ":" ) ls32
-    IPV6ADDRESS2$ = subexp("\\:\\:" + subexp(H16$ + "\\:") + "{5}" + LS32$),
-        //                      "::" 5( h16 ":" ) ls32
-    IPV6ADDRESS3$ = subexp(subexp(H16$) + "?\\:\\:" + subexp(H16$ + "\\:") + "{4}" + LS32$),
-        //[               h16 ] "::" 4( h16 ":" ) ls32
-    IPV6ADDRESS4$ = subexp(subexp(subexp(H16$ + "\\:") + "{0,1}" + H16$) + "?\\:\\:" + subexp(H16$ + "\\:") + "{3}" + LS32$),
-        //[ *1( h16 ":" ) h16 ] "::" 3( h16 ":" ) ls32
-    IPV6ADDRESS5$ = subexp(subexp(subexp(H16$ + "\\:") + "{0,2}" + H16$) + "?\\:\\:" + subexp(H16$ + "\\:") + "{2}" + LS32$),
-        //[ *2( h16 ":" ) h16 ] "::" 2( h16 ":" ) ls32
-    IPV6ADDRESS6$ = subexp(subexp(subexp(H16$ + "\\:") + "{0,3}" + H16$) + "?\\:\\:" + H16$ + "\\:" + LS32$),
-        //[ *3( h16 ":" ) h16 ] "::"    h16 ":"   ls32
-    IPV6ADDRESS7$ = subexp(subexp(subexp(H16$ + "\\:") + "{0,4}" + H16$) + "?\\:\\:" + LS32$),
-        //[ *4( h16 ":" ) h16 ] "::"              ls32
-    IPV6ADDRESS8$ = subexp(subexp(subexp(H16$ + "\\:") + "{0,5}" + H16$) + "?\\:\\:" + H16$),
-        //[ *5( h16 ":" ) h16 ] "::"              h16
-    IPV6ADDRESS9$ = subexp(subexp(subexp(H16$ + "\\:") + "{0,6}" + H16$) + "?\\:\\:"),
-        //[ *6( h16 ":" ) h16 ] "::"
-    IPV6ADDRESS$ = subexp([IPV6ADDRESS1$, IPV6ADDRESS2$, IPV6ADDRESS3$, IPV6ADDRESS4$, IPV6ADDRESS5$, IPV6ADDRESS6$, IPV6ADDRESS7$, IPV6ADDRESS8$, IPV6ADDRESS9$].join("|")),
-        ZONEID$ = subexp(subexp(UNRESERVED$$ + "|" + PCT_ENCODED$) + "+"),
-        //RFC 6874
-    IPV6ADDRZ$ = subexp(IPV6ADDRESS$ + "\\%25" + ZONEID$),
-        //RFC 6874
-    IPV6ADDRZ_RELAXED$ = subexp(IPV6ADDRESS$ + subexp("\\%25|\\%(?!" + HEXDIG$$ + "{2})") + ZONEID$),
-        //RFC 6874, with relaxed parsing rules
-    IPVFUTURE$ = subexp("[vV]" + HEXDIG$$ + "+\\." + merge(UNRESERVED$$, SUB_DELIMS$$, "[\\:]") + "+"),
-        IP_LITERAL$ = subexp("\\[" + subexp(IPV6ADDRZ_RELAXED$ + "|" + IPV6ADDRESS$ + "|" + IPVFUTURE$) + "\\]"),
-        //RFC 6874
-    REG_NAME$ = subexp(subexp(PCT_ENCODED$ + "|" + merge(UNRESERVED$$, SUB_DELIMS$$)) + "*"),
-        HOST$ = subexp(IP_LITERAL$ + "|" + IPV4ADDRESS$ + "(?!" + REG_NAME$ + ")" + "|" + REG_NAME$),
-        PORT$ = subexp(DIGIT$$ + "*"),
-        AUTHORITY$ = subexp(subexp(USERINFO$ + "@") + "?" + HOST$ + subexp("\\:" + PORT$) + "?"),
-        PCHAR$ = subexp(PCT_ENCODED$ + "|" + merge(UNRESERVED$$, SUB_DELIMS$$, "[\\:\\@]")),
-        SEGMENT$ = subexp(PCHAR$ + "*"),
-        SEGMENT_NZ$ = subexp(PCHAR$ + "+"),
-        SEGMENT_NZ_NC$ = subexp(subexp(PCT_ENCODED$ + "|" + merge(UNRESERVED$$, SUB_DELIMS$$, "[\\@]")) + "+"),
-        PATH_ABEMPTY$ = subexp(subexp("\\/" + SEGMENT$) + "*"),
-        PATH_ABSOLUTE$ = subexp("\\/" + subexp(SEGMENT_NZ$ + PATH_ABEMPTY$) + "?"),
-        //simplified
-    PATH_NOSCHEME$ = subexp(SEGMENT_NZ_NC$ + PATH_ABEMPTY$),
-        //simplified
-    PATH_ROOTLESS$ = subexp(SEGMENT_NZ$ + PATH_ABEMPTY$),
-        //simplified
-    PATH_EMPTY$ = "(?!" + PCHAR$ + ")",
-        PATH$ = subexp(PATH_ABEMPTY$ + "|" + PATH_ABSOLUTE$ + "|" + PATH_NOSCHEME$ + "|" + PATH_ROOTLESS$ + "|" + PATH_EMPTY$),
-        QUERY$ = subexp(subexp(PCHAR$ + "|" + merge("[\\/\\?]", IPRIVATE$$)) + "*"),
-        FRAGMENT$ = subexp(subexp(PCHAR$ + "|[\\/\\?]") + "*"),
-        HIER_PART$ = subexp(subexp("\\/\\/" + AUTHORITY$ + PATH_ABEMPTY$) + "|" + PATH_ABSOLUTE$ + "|" + PATH_ROOTLESS$ + "|" + PATH_EMPTY$),
-        URI$ = subexp(SCHEME$ + "\\:" + HIER_PART$ + subexp("\\?" + QUERY$) + "?" + subexp("\\#" + FRAGMENT$) + "?"),
-        RELATIVE_PART$ = subexp(subexp("\\/\\/" + AUTHORITY$ + PATH_ABEMPTY$) + "|" + PATH_ABSOLUTE$ + "|" + PATH_NOSCHEME$ + "|" + PATH_EMPTY$),
-        RELATIVE$ = subexp(RELATIVE_PART$ + subexp("\\?" + QUERY$) + "?" + subexp("\\#" + FRAGMENT$) + "?"),
-        URI_REFERENCE$ = subexp(URI$ + "|" + RELATIVE$),
-        ABSOLUTE_URI$ = subexp(SCHEME$ + "\\:" + HIER_PART$ + subexp("\\?" + QUERY$) + "?"),
-        GENERIC_REF$ = "^(" + SCHEME$ + ")\\:" + subexp(subexp("\\/\\/(" + subexp("(" + USERINFO$ + ")@") + "?(" + HOST$ + ")" + subexp("\\:(" + PORT$ + ")") + "?)") + "?(" + PATH_ABEMPTY$ + "|" + PATH_ABSOLUTE$ + "|" + PATH_ROOTLESS$ + "|" + PATH_EMPTY$ + ")") + subexp("\\?(" + QUERY$ + ")") + "?" + subexp("\\#(" + FRAGMENT$ + ")") + "?$",
-        RELATIVE_REF$ = "^(){0}" + subexp(subexp("\\/\\/(" + subexp("(" + USERINFO$ + ")@") + "?(" + HOST$ + ")" + subexp("\\:(" + PORT$ + ")") + "?)") + "?(" + PATH_ABEMPTY$ + "|" + PATH_ABSOLUTE$ + "|" + PATH_NOSCHEME$ + "|" + PATH_EMPTY$ + ")") + subexp("\\?(" + QUERY$ + ")") + "?" + subexp("\\#(" + FRAGMENT$ + ")") + "?$",
-        ABSOLUTE_REF$ = "^(" + SCHEME$ + ")\\:" + subexp(subexp("\\/\\/(" + subexp("(" + USERINFO$ + ")@") + "?(" + HOST$ + ")" + subexp("\\:(" + PORT$ + ")") + "?)") + "?(" + PATH_ABEMPTY$ + "|" + PATH_ABSOLUTE$ + "|" + PATH_ROOTLESS$ + "|" + PATH_EMPTY$ + ")") + subexp("\\?(" + QUERY$ + ")") + "?$",
-        SAMEDOC_REF$ = "^" + subexp("\\#(" + FRAGMENT$ + ")") + "?$",
-        AUTHORITY_REF$ = "^" + subexp("(" + USERINFO$ + ")@") + "?(" + HOST$ + ")" + subexp("\\:(" + PORT$ + ")") + "?$";
-    return {
-        NOT_SCHEME: new RegExp(merge("[^]", ALPHA$$, DIGIT$$, "[\\+\\-\\.]"), "g"),
-        NOT_USERINFO: new RegExp(merge("[^\\%\\:]", UNRESERVED$$, SUB_DELIMS$$), "g"),
-        NOT_HOST: new RegExp(merge("[^\\%\\[\\]\\:]", UNRESERVED$$, SUB_DELIMS$$), "g"),
-        NOT_PATH: new RegExp(merge("[^\\%\\/\\:\\@]", UNRESERVED$$, SUB_DELIMS$$), "g"),
-        NOT_PATH_NOSCHEME: new RegExp(merge("[^\\%\\/\\@]", UNRESERVED$$, SUB_DELIMS$$), "g"),
-        NOT_QUERY: new RegExp(merge("[^\\%]", UNRESERVED$$, SUB_DELIMS$$, "[\\:\\@\\/\\?]", IPRIVATE$$), "g"),
-        NOT_FRAGMENT: new RegExp(merge("[^\\%]", UNRESERVED$$, SUB_DELIMS$$, "[\\:\\@\\/\\?]"), "g"),
-        ESCAPE: new RegExp(merge("[^]", UNRESERVED$$, SUB_DELIMS$$), "g"),
-        UNRESERVED: new RegExp(UNRESERVED$$, "g"),
-        OTHER_CHARS: new RegExp(merge("[^\\%]", UNRESERVED$$, RESERVED$$), "g"),
-        PCT_ENCODED: new RegExp(PCT_ENCODED$, "g"),
-        IPV4ADDRESS: new RegExp("^(" + IPV4ADDRESS$ + ")$"),
-        IPV6ADDRESS: new RegExp("^\\[?(" + IPV6ADDRESS$ + ")" + subexp(subexp("\\%25|\\%(?!" + HEXDIG$$ + "{2})") + "(" + ZONEID$ + ")") + "?\\]?$") //RFC 6874, with relaxed parsing rules
-    };
-}
-var URI_PROTOCOL = buildExps(false);
-
-var IRI_PROTOCOL = buildExps(true);
-
-var slicedToArray = function () {
-  function sliceIterator(arr, i) {
-    var _arr = [];
-    var _n = true;
-    var _d = false;
-    var _e = undefined;
-
-    try {
-      for (var _i = arr[Symbol.iterator](), _s; !(_n = (_s = _i.next()).done); _n = true) {
-        _arr.push(_s.value);
-
-        if (i && _arr.length === i) break;
-      }
-    } catch (err) {
-      _d = true;
-      _e = err;
-    } finally {
-      try {
-        if (!_n && _i["return"]) _i["return"]();
-      } finally {
-        if (_d) throw _e;
-      }
-    }
-
-    return _arr;
-  }
-
-  return function (arr, i) {
-    if (Array.isArray(arr)) {
-      return arr;
-    } else if (Symbol.iterator in Object(arr)) {
-      return sliceIterator(arr, i);
-    } else {
-      throw new TypeError("Invalid attempt to destructure non-iterable instance");
-    }
-  };
-}();
-
-
-
-
-
-
-
-
-
-
-
-
-
-var toConsumableArray = function (arr) {
-  if (Array.isArray(arr)) {
-    for (var i = 0, arr2 = Array(arr.length); i < arr.length; i++) arr2[i] = arr[i];
-
-    return arr2;
-  } else {
-    return Array.from(arr);
-  }
-};
-
-/** Highest positive signed 32-bit float value */
-
-var maxInt = 2147483647; // aka. 0x7FFFFFFF or 2^31-1
-
-/** Bootstring parameters */
-var base = 36;
-var tMin = 1;
-var tMax = 26;
-var skew = 38;
-var damp = 700;
-var initialBias = 72;
-var initialN = 128; // 0x80
-var delimiter = '-'; // '\x2D'
-
-/** Regular expressions */
-var regexPunycode = /^xn--/;
-var regexNonASCII = /[^\0-\x7E]/; // non-ASCII chars
-var regexSeparators = /[\x2E\u3002\uFF0E\uFF61]/g; // RFC 3490 separators
-
-/** Error messages */
-var errors = {
-	'overflow': 'Overflow: input needs wider integers to process',
-	'not-basic': 'Illegal input >= 0x80 (not a basic code point)',
-	'invalid-input': 'Invalid input'
-};
-
-/** Convenience shortcuts */
-var baseMinusTMin = base - tMin;
-var floor = Math.floor;
-var stringFromCharCode = String.fromCharCode;
-
-/*--------------------------------------------------------------------------*/
-
-/**
- * A generic error utility function.
- * @private
- * @param {String} type The error type.
- * @returns {Error} Throws a `RangeError` with the applicable error message.
- */
-function error$1(type) {
-	throw new RangeError(errors[type]);
-}
-
-/**
- * A generic `Array#map` utility function.
- * @private
- * @param {Array} array The array to iterate over.
- * @param {Function} callback The function that gets called for every array
- * item.
- * @returns {Array} A new array of values returned by the callback function.
- */
-function map(array, fn) {
-	var result = [];
-	var length = array.length;
-	while (length--) {
-		result[length] = fn(array[length]);
-	}
-	return result;
-}
-
-/**
- * A simple `Array#map`-like wrapper to work with domain name strings or email
- * addresses.
- * @private
- * @param {String} domain The domain name or email address.
- * @param {Function} callback The function that gets called for every
- * character.
- * @returns {Array} A new string of characters returned by the callback
- * function.
- */
-function mapDomain(string, fn) {
-	var parts = string.split('@');
-	var result = '';
-	if (parts.length > 1) {
-		// In email addresses, only the domain name should be punycoded. Leave
-		// the local part (i.e. everything up to `@`) intact.
-		result = parts[0] + '@';
-		string = parts[1];
-	}
-	// Avoid `split(regex)` for IE8 compatibility. See #17.
-	string = string.replace(regexSeparators, '\x2E');
-	var labels = string.split('.');
-	var encoded = map(labels, fn).join('.');
-	return result + encoded;
-}
-
-/**
- * Creates an array containing the numeric code points of each Unicode
- * character in the string. While JavaScript uses UCS-2 internally,
- * this function will convert a pair of surrogate halves (each of which
- * UCS-2 exposes as separate characters) into a single code point,
- * matching UTF-16.
- * @see `punycode.ucs2.encode`
- * @see <https://mathiasbynens.be/notes/javascript-encoding>
- * @memberOf punycode.ucs2
- * @name decode
- * @param {String} string The Unicode input string (UCS-2).
- * @returns {Array} The new array of code points.
- */
-function ucs2decode(string) {
-	var output = [];
-	var counter = 0;
-	var length = string.length;
-	while (counter < length) {
-		var value = string.charCodeAt(counter++);
-		if (value >= 0xD800 && value <= 0xDBFF && counter < length) {
-			// It's a high surrogate, and there is a next character.
-			var extra = string.charCodeAt(counter++);
-			if ((extra & 0xFC00) == 0xDC00) {
-				// Low surrogate.
-				output.push(((value & 0x3FF) << 10) + (extra & 0x3FF) + 0x10000);
-			} else {
-				// It's an unmatched surrogate; only append this code unit, in case the
-				// next code unit is the high surrogate of a surrogate pair.
-				output.push(value);
-				counter--;
-			}
-		} else {
-			output.push(value);
-		}
-	}
-	return output;
-}
-
-/**
- * Creates a string based on an array of numeric code points.
- * @see `punycode.ucs2.decode`
- * @memberOf punycode.ucs2
- * @name encode
- * @param {Array} codePoints The array of numeric code points.
- * @returns {String} The new Unicode string (UCS-2).
- */
-var ucs2encode = function ucs2encode(array) {
-	return String.fromCodePoint.apply(String, toConsumableArray(array));
-};
-
-/**
- * Converts a basic code point into a digit/integer.
- * @see `digitToBasic()`
- * @private
- * @param {Number} codePoint The basic numeric code point value.
- * @returns {Number} The numeric value of a basic code point (for use in
- * representing integers) in the range `0` to `base - 1`, or `base` if
- * the code point does not represent a value.
- */
-var basicToDigit = function basicToDigit(codePoint) {
-	if (codePoint - 0x30 < 0x0A) {
-		return codePoint - 0x16;
-	}
-	if (codePoint - 0x41 < 0x1A) {
-		return codePoint - 0x41;
-	}
-	if (codePoint - 0x61 < 0x1A) {
-		return codePoint - 0x61;
-	}
-	return base;
-};
-
-/**
- * Converts a digit/integer into a basic code point.
- * @see `basicToDigit()`
- * @private
- * @param {Number} digit The numeric value of a basic code point.
- * @returns {Number} The basic code point whose value (when used for
- * representing integers) is `digit`, which needs to be in the range
- * `0` to `base - 1`. If `flag` is non-zero, the uppercase form is
- * used; else, the lowercase form is used. The behavior is undefined
- * if `flag` is non-zero and `digit` has no uppercase form.
- */
-var digitToBasic = function digitToBasic(digit, flag) {
-	//  0..25 map to ASCII a..z or A..Z
-	// 26..35 map to ASCII 0..9
-	return digit + 22 + 75 * (digit < 26) - ((flag != 0) << 5);
-};
-
-/**
- * Bias adaptation function as per section 3.4 of RFC 3492.
- * https://tools.ietf.org/html/rfc3492#section-3.4
- * @private
- */
-var adapt = function adapt(delta, numPoints, firstTime) {
-	var k = 0;
-	delta = firstTime ? floor(delta / damp) : delta >> 1;
-	delta += floor(delta / numPoints);
-	for (; /* no initialization */delta > baseMinusTMin * tMax >> 1; k += base) {
-		delta = floor(delta / baseMinusTMin);
-	}
-	return floor(k + (baseMinusTMin + 1) * delta / (delta + skew));
-};
-
-/**
- * Converts a Punycode string of ASCII-only symbols to a string of Unicode
- * symbols.
- * @memberOf punycode
- * @param {String} input The Punycode string of ASCII-only symbols.
- * @returns {String} The resulting string of Unicode symbols.
- */
-var decode = function decode(input) {
-	// Don't use UCS-2.
-	var output = [];
-	var inputLength = input.length;
-	var i = 0;
-	var n = initialN;
-	var bias = initialBias;
-
-	// Handle the basic code points: let `basic` be the number of input code
-	// points before the last delimiter, or `0` if there is none, then copy
-	// the first basic code points to the output.
-
-	var basic = input.lastIndexOf(delimiter);
-	if (basic < 0) {
-		basic = 0;
-	}
-
-	for (var j = 0; j < basic; ++j) {
-		// if it's not a basic code point
-		if (input.charCodeAt(j) >= 0x80) {
-			error$1('not-basic');
-		}
-		output.push(input.charCodeAt(j));
-	}
-
-	// Main decoding loop: start just after the last delimiter if any basic code
-	// points were copied; start at the beginning otherwise.
-
-	for (var index = basic > 0 ? basic + 1 : 0; index < inputLength;) /* no final expression */{
-
-		// `index` is the index of the next character to be consumed.
-		// Decode a generalized variable-length integer into `delta`,
-		// which gets added to `i`. The overflow checking is easier
-		// if we increase `i` as we go, then subtract off its starting
-		// value at the end to obtain `delta`.
-		var oldi = i;
-		for (var w = 1, k = base;; /* no condition */k += base) {
-
-			if (index >= inputLength) {
-				error$1('invalid-input');
-			}
-
-			var digit = basicToDigit(input.charCodeAt(index++));
-
-			if (digit >= base || digit > floor((maxInt - i) / w)) {
-				error$1('overflow');
-			}
-
-			i += digit * w;
-			var t = k <= bias ? tMin : k >= bias + tMax ? tMax : k - bias;
-
-			if (digit < t) {
-				break;
-			}
-
-			var baseMinusT = base - t;
-			if (w > floor(maxInt / baseMinusT)) {
-				error$1('overflow');
-			}
-
-			w *= baseMinusT;
-		}
-
-		var out = output.length + 1;
-		bias = adapt(i - oldi, out, oldi == 0);
-
-		// `i` was supposed to wrap around from `out` to `0`,
-		// incrementing `n` each time, so we'll fix that now:
-		if (floor(i / out) > maxInt - n) {
-			error$1('overflow');
-		}
-
-		n += floor(i / out);
-		i %= out;
-
-		// Insert `n` at position `i` of the output.
-		output.splice(i++, 0, n);
-	}
-
-	return String.fromCodePoint.apply(String, output);
-};
-
-/**
- * Converts a string of Unicode symbols (e.g. a domain name label) to a
- * Punycode string of ASCII-only symbols.
- * @memberOf punycode
- * @param {String} input The string of Unicode symbols.
- * @returns {String} The resulting Punycode string of ASCII-only symbols.
- */
-var encode = function encode(input) {
-	var output = [];
-
-	// Convert the input in UCS-2 to an array of Unicode code points.
-	input = ucs2decode(input);
-
-	// Cache the length.
-	var inputLength = input.length;
-
-	// Initialize the state.
-	var n = initialN;
-	var delta = 0;
-	var bias = initialBias;
-
-	// Handle the basic code points.
-	var _iteratorNormalCompletion = true;
-	var _didIteratorError = false;
-	var _iteratorError = undefined;
-
-	try {
-		for (var _iterator = input[Symbol.iterator](), _step; !(_iteratorNormalCompletion = (_step = _iterator.next()).done); _iteratorNormalCompletion = true) {
-			var _currentValue2 = _step.value;
-
-			if (_currentValue2 < 0x80) {
-				output.push(stringFromCharCode(_currentValue2));
-			}
-		}
-	} catch (err) {
-		_didIteratorError = true;
-		_iteratorError = err;
-	} finally {
-		try {
-			if (!_iteratorNormalCompletion && _iterator.return) {
-				_iterator.return();
-			}
-		} finally {
-			if (_didIteratorError) {
-				throw _iteratorError;
-			}
-		}
-	}
-
-	var basicLength = output.length;
-	var handledCPCount = basicLength;
-
-	// `handledCPCount` is the number of code points that have been handled;
-	// `basicLength` is the number of basic code points.
-
-	// Finish the basic string with a delimiter unless it's empty.
-	if (basicLength) {
-		output.push(delimiter);
-	}
-
-	// Main encoding loop:
-	while (handledCPCount < inputLength) {
-
-		// All non-basic code points < n have been handled already. Find the next
-		// larger one:
-		var m = maxInt;
-		var _iteratorNormalCompletion2 = true;
-		var _didIteratorError2 = false;
-		var _iteratorError2 = undefined;
-
-		try {
-			for (var _iterator2 = input[Symbol.iterator](), _step2; !(_iteratorNormalCompletion2 = (_step2 = _iterator2.next()).done); _iteratorNormalCompletion2 = true) {
-				var currentValue = _step2.value;
-
-				if (currentValue >= n && currentValue < m) {
-					m = currentValue;
-				}
-			}
-
-			// Increase `delta` enough to advance the decoder's <n,i> state to <m,0>,
-			// but guard against overflow.
-		} catch (err) {
-			_didIteratorError2 = true;
-			_iteratorError2 = err;
-		} finally {
-			try {
-				if (!_iteratorNormalCompletion2 && _iterator2.return) {
-					_iterator2.return();
-				}
-			} finally {
-				if (_didIteratorError2) {
-					throw _iteratorError2;
-				}
-			}
-		}
-
-		var handledCPCountPlusOne = handledCPCount + 1;
-		if (m - n > floor((maxInt - delta) / handledCPCountPlusOne)) {
-			error$1('overflow');
-		}
-
-		delta += (m - n) * handledCPCountPlusOne;
-		n = m;
-
-		var _iteratorNormalCompletion3 = true;
-		var _didIteratorError3 = false;
-		var _iteratorError3 = undefined;
-
-		try {
-			for (var _iterator3 = input[Symbol.iterator](), _step3; !(_iteratorNormalCompletion3 = (_step3 = _iterator3.next()).done); _iteratorNormalCompletion3 = true) {
-				var _currentValue = _step3.value;
-
-				if (_currentValue < n && ++delta > maxInt) {
-					error$1('overflow');
-				}
-				if (_currentValue == n) {
-					// Represent delta as a generalized variable-length integer.
-					var q = delta;
-					for (var k = base;; /* no condition */k += base) {
-						var t = k <= bias ? tMin : k >= bias + tMax ? tMax : k - bias;
-						if (q < t) {
-							break;
-						}
-						var qMinusT = q - t;
-						var baseMinusT = base - t;
-						output.push(stringFromCharCode(digitToBasic(t + qMinusT % baseMinusT, 0)));
-						q = floor(qMinusT / baseMinusT);
-					}
-
-					output.push(stringFromCharCode(digitToBasic(q, 0)));
-					bias = adapt(delta, handledCPCountPlusOne, handledCPCount == basicLength);
-					delta = 0;
-					++handledCPCount;
-				}
-			}
-		} catch (err) {
-			_didIteratorError3 = true;
-			_iteratorError3 = err;
-		} finally {
-			try {
-				if (!_iteratorNormalCompletion3 && _iterator3.return) {
-					_iterator3.return();
-				}
-			} finally {
-				if (_didIteratorError3) {
-					throw _iteratorError3;
-				}
-			}
-		}
-
-		++delta;
-		++n;
-	}
-	return output.join('');
-};
-
-/**
- * Converts a Punycode string representing a domain name or an email address
- * to Unicode. Only the Punycoded parts of the input will be converted, i.e.
- * it doesn't matter if you call it on a string that has already been
- * converted to Unicode.
- * @memberOf punycode
- * @param {String} input The Punycoded domain name or email address to
- * convert to Unicode.
- * @returns {String} The Unicode representation of the given Punycode
- * string.
- */
-var toUnicode = function toUnicode(input) {
-	return mapDomain(input, function (string) {
-		return regexPunycode.test(string) ? decode(string.slice(4).toLowerCase()) : string;
-	});
-};
-
-/**
- * Converts a Unicode string representing a domain name or an email address to
- * Punycode. Only the non-ASCII parts of the domain name will be converted,
- * i.e. it doesn't matter if you call it with a domain that's already in
- * ASCII.
- * @memberOf punycode
- * @param {String} input The domain name or email address to convert, as a
- * Unicode string.
- * @returns {String} The Punycode representation of the given domain name or
- * email address.
- */
-var toASCII = function toASCII(input) {
-	return mapDomain(input, function (string) {
-		return regexNonASCII.test(string) ? 'xn--' + encode(string) : string;
-	});
-};
-
-/*--------------------------------------------------------------------------*/
-
-/** Define the public API */
-var punycode = {
-	/**
-  * A string representing the current Punycode.js version number.
-  * @memberOf punycode
-  * @type String
-  */
-	'version': '2.1.0',
-	/**
-  * An object of methods to convert from JavaScript's internal character
-  * representation (UCS-2) to Unicode code points, and back.
-  * @see <https://mathiasbynens.be/notes/javascript-encoding>
-  * @memberOf punycode
-  * @type Object
-  */
-	'ucs2': {
-		'decode': ucs2decode,
-		'encode': ucs2encode
-	},
-	'decode': decode,
-	'encode': encode,
-	'toASCII': toASCII,
-	'toUnicode': toUnicode
-};
-
-/**
- * URI.js
- *
- * @fileoverview An RFC 3986 compliant, scheme extendable URI parsing/validating/resolving library for JavaScript.
- * @author <a href="mailto:gary.court@gmail.com">Gary Court</a>
- * @see http://github.com/garycourt/uri-js
- */
-/**
- * Copyright 2011 Gary Court. All rights reserved.
- *
- * Redistribution and use in source and binary forms, with or without modification, are
- * permitted provided that the following conditions are met:
- *
- *    1. Redistributions of source code must retain the above copyright notice, this list of
- *       conditions and the following disclaimer.
- *
- *    2. Redistributions in binary form must reproduce the above copyright notice, this list
- *       of conditions and the following disclaimer in the documentation and/or other materials
- *       provided with the distribution.
- *
- * THIS SOFTWARE IS PROVIDED BY GARY COURT ``AS IS'' AND ANY EXPRESS OR IMPLIED
- * WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND
- * FITNESS FOR A PARTICULAR PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL GARY COURT OR
- * CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR
- * CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR
- * SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON
- * ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING
- * NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF
- * ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
- *
- * The views and conclusions contained in the software and documentation are those of the
- * authors and should not be interpreted as representing official policies, either expressed
- * or implied, of Gary Court.
- */
-var SCHEMES = {};
-function pctEncChar(chr) {
-    var c = chr.charCodeAt(0);
-    var e = void 0;
-    if (c < 16) e = "%0" + c.toString(16).toUpperCase();else if (c < 128) e = "%" + c.toString(16).toUpperCase();else if (c < 2048) e = "%" + (c >> 6 | 192).toString(16).toUpperCase() + "%" + (c & 63 | 128).toString(16).toUpperCase();else e = "%" + (c >> 12 | 224).toString(16).toUpperCase() + "%" + (c >> 6 & 63 | 128).toString(16).toUpperCase() + "%" + (c & 63 | 128).toString(16).toUpperCase();
-    return e;
-}
-function pctDecChars(str) {
-    var newStr = "";
-    var i = 0;
-    var il = str.length;
-    while (i < il) {
-        var c = parseInt(str.substr(i + 1, 2), 16);
-        if (c < 128) {
-            newStr += String.fromCharCode(c);
-            i += 3;
-        } else if (c >= 194 && c < 224) {
-            if (il - i >= 6) {
-                var c2 = parseInt(str.substr(i + 4, 2), 16);
-                newStr += String.fromCharCode((c & 31) << 6 | c2 & 63);
-            } else {
-                newStr += str.substr(i, 6);
-            }
-            i += 6;
-        } else if (c >= 224) {
-            if (il - i >= 9) {
-                var _c = parseInt(str.substr(i + 4, 2), 16);
-                var c3 = parseInt(str.substr(i + 7, 2), 16);
-                newStr += String.fromCharCode((c & 15) << 12 | (_c & 63) << 6 | c3 & 63);
-            } else {
-                newStr += str.substr(i, 9);
-            }
-            i += 9;
-        } else {
-            newStr += str.substr(i, 3);
-            i += 3;
-        }
-    }
-    return newStr;
-}
-function _normalizeComponentEncoding(components, protocol) {
-    function decodeUnreserved(str) {
-        var decStr = pctDecChars(str);
-        return !decStr.match(protocol.UNRESERVED) ? str : decStr;
-    }
-    if (components.scheme) components.scheme = String(components.scheme).replace(protocol.PCT_ENCODED, decodeUnreserved).toLowerCase().replace(protocol.NOT_SCHEME, "");
-    if (components.userinfo !== undefined) components.userinfo = String(components.userinfo).replace(protocol.PCT_ENCODED, decodeUnreserved).replace(protocol.NOT_USERINFO, pctEncChar).replace(protocol.PCT_ENCODED, toUpperCase);
-    if (components.host !== undefined) components.host = String(components.host).replace(protocol.PCT_ENCODED, decodeUnreserved).toLowerCase().replace(protocol.NOT_HOST, pctEncChar).replace(protocol.PCT_ENCODED, toUpperCase);
-    if (components.path !== undefined) components.path = String(components.path).replace(protocol.PCT_ENCODED, decodeUnreserved).replace(components.scheme ? protocol.NOT_PATH : protocol.NOT_PATH_NOSCHEME, pctEncChar).replace(protocol.PCT_ENCODED, toUpperCase);
-    if (components.query !== undefined) components.query = String(components.query).replace(protocol.PCT_ENCODED, decodeUnreserved).replace(protocol.NOT_QUERY, pctEncChar).replace(protocol.PCT_ENCODED, toUpperCase);
-    if (components.fragment !== undefined) components.fragment = String(components.fragment).replace(protocol.PCT_ENCODED, decodeUnreserved).replace(protocol.NOT_FRAGMENT, pctEncChar).replace(protocol.PCT_ENCODED, toUpperCase);
-    return components;
-}
-
-function _stripLeadingZeros(str) {
-    return str.replace(/^0*(.*)/, "$1") || "0";
-}
-function _normalizeIPv4(host, protocol) {
-    var matches = host.match(protocol.IPV4ADDRESS) || [];
-
-    var _matches = slicedToArray(matches, 2),
-        address = _matches[1];
-
-    if (address) {
-        return address.split(".").map(_stripLeadingZeros).join(".");
-    } else {
-        return host;
-    }
-}
-function _normalizeIPv6(host, protocol) {
-    var matches = host.match(protocol.IPV6ADDRESS) || [];
-
-    var _matches2 = slicedToArray(matches, 3),
-        address = _matches2[1],
-        zone = _matches2[2];
-
-    if (address) {
-        var _address$toLowerCase$ = address.toLowerCase().split('::').reverse(),
-            _address$toLowerCase$2 = slicedToArray(_address$toLowerCase$, 2),
-            last = _address$toLowerCase$2[0],
-            first = _address$toLowerCase$2[1];
-
-        var firstFields = first ? first.split(":").map(_stripLeadingZeros) : [];
-        var lastFields = last.split(":").map(_stripLeadingZeros);
-        var isLastFieldIPv4Address = protocol.IPV4ADDRESS.test(lastFields[lastFields.length - 1]);
-        var fieldCount = isLastFieldIPv4Address ? 7 : 8;
-        var lastFieldsStart = lastFields.length - fieldCount;
-        var fields = Array(fieldCount);
-        for (var x = 0; x < fieldCount; ++x) {
-            fields[x] = firstFields[x] || lastFields[lastFieldsStart + x] || '';
-        }
-        if (isLastFieldIPv4Address) {
-            fields[fieldCount - 1] = _normalizeIPv4(fields[fieldCount - 1], protocol);
-        }
-        var allZeroFields = fields.reduce(function (acc, field, index) {
-            if (!field || field === "0") {
-                var lastLongest = acc[acc.length - 1];
-                if (lastLongest && lastLongest.index + lastLongest.length === index) {
-                    lastLongest.length++;
-                } else {
-                    acc.push({ index: index, length: 1 });
-                }
-            }
-            return acc;
-        }, []);
-        var longestZeroFields = allZeroFields.sort(function (a, b) {
-            return b.length - a.length;
-        })[0];
-        var newHost = void 0;
-        if (longestZeroFields && longestZeroFields.length > 1) {
-            var newFirst = fields.slice(0, longestZeroFields.index);
-            var newLast = fields.slice(longestZeroFields.index + longestZeroFields.length);
-            newHost = newFirst.join(":") + "::" + newLast.join(":");
-        } else {
-            newHost = fields.join(":");
-        }
-        if (zone) {
-            newHost += "%" + zone;
-        }
-        return newHost;
-    } else {
-        return host;
-    }
-}
-var URI_PARSE = /^(?:([^:\/?#]+):)?(?:\/\/((?:([^\/?#@]*)@)?(\[[^\/?#\]]+\]|[^\/?#:]*)(?:\:(\d*))?))?([^?#]*)(?:\?([^#]*))?(?:#((?:.|\n|\r)*))?/i;
-var NO_MATCH_IS_UNDEFINED = "".match(/(){0}/)[1] === undefined;
-function parse(uriString) {
-    var options = arguments.length > 1 && arguments[1] !== undefined ? arguments[1] : {};
-
-    var components = {};
-    var protocol = options.iri !== false ? IRI_PROTOCOL : URI_PROTOCOL;
-    if (options.reference === "suffix") uriString = (options.scheme ? options.scheme + ":" : "") + "//" + uriString;
-    var matches = uriString.match(URI_PARSE);
-    if (matches) {
-        if (NO_MATCH_IS_UNDEFINED) {
-            //store each component
-            components.scheme = matches[1];
-            components.userinfo = matches[3];
-            components.host = matches[4];
-            components.port = parseInt(matches[5], 10);
-            components.path = matches[6] || "";
-            components.query = matches[7];
-            components.fragment = matches[8];
-            //fix port number
-            if (isNaN(components.port)) {
-                components.port = matches[5];
-            }
-        } else {
-            //IE FIX for improper RegExp matching
-            //store each component
-            components.scheme = matches[1] || undefined;
-            components.userinfo = uriString.indexOf("@") !== -1 ? matches[3] : undefined;
-            components.host = uriString.indexOf("//") !== -1 ? matches[4] : undefined;
-            components.port = parseInt(matches[5], 10);
-            components.path = matches[6] || "";
-            components.query = uriString.indexOf("?") !== -1 ? matches[7] : undefined;
-            components.fragment = uriString.indexOf("#") !== -1 ? matches[8] : undefined;
-            //fix port number
-            if (isNaN(components.port)) {
-                components.port = uriString.match(/\/\/(?:.|\n)*\:(?:\/|\?|\#|$)/) ? matches[4] : undefined;
-            }
-        }
-        if (components.host) {
-            //normalize IP hosts
-            components.host = _normalizeIPv6(_normalizeIPv4(components.host, protocol), protocol);
-        }
-        //determine reference type
-        if (components.scheme === undefined && components.userinfo === undefined && components.host === undefined && components.port === undefined && !components.path && components.query === undefined) {
-            components.reference = "same-document";
-        } else if (components.scheme === undefined) {
-            components.reference = "relative";
-        } else if (components.fragment === undefined) {
-            components.reference = "absolute";
-        } else {
-            components.reference = "uri";
-        }
-        //check for reference errors
-        if (options.reference && options.reference !== "suffix" && options.reference !== components.reference) {
-            components.error = components.error || "URI is not a " + options.reference + " reference.";
-        }
-        //find scheme handler
-        var schemeHandler = SCHEMES[(options.scheme || components.scheme || "").toLowerCase()];
-        //check if scheme can't handle IRIs
-        if (!options.unicodeSupport && (!schemeHandler || !schemeHandler.unicodeSupport)) {
-            //if host component is a domain name
-            if (components.host && (options.domainHost || schemeHandler && schemeHandler.domainHost)) {
-                //convert Unicode IDN -> ASCII IDN
-                try {
-                    components.host = punycode.toASCII(components.host.replace(protocol.PCT_ENCODED, pctDecChars).toLowerCase());
-                } catch (e) {
-                    components.error = components.error || "Host's domain name can not be converted to ASCII via punycode: " + e;
-                }
-            }
-            //convert IRI -> URI
-            _normalizeComponentEncoding(components, URI_PROTOCOL);
-        } else {
-            //normalize encodings
-            _normalizeComponentEncoding(components, protocol);
-        }
-        //perform scheme specific parsing
-        if (schemeHandler && schemeHandler.parse) {
-            schemeHandler.parse(components, options);
-        }
-    } else {
-        components.error = components.error || "URI can not be parsed.";
-    }
-    return components;
-}
-
-function _recomposeAuthority(components, options) {
-    var protocol = options.iri !== false ? IRI_PROTOCOL : URI_PROTOCOL;
-    var uriTokens = [];
-    if (components.userinfo !== undefined) {
-        uriTokens.push(components.userinfo);
-        uriTokens.push("@");
-    }
-    if (components.host !== undefined) {
-        //normalize IP hosts, add brackets and escape zone separator for IPv6
-        uriTokens.push(_normalizeIPv6(_normalizeIPv4(String(components.host), protocol), protocol).replace(protocol.IPV6ADDRESS, function (_, $1, $2) {
-            return "[" + $1 + ($2 ? "%25" + $2 : "") + "]";
-        }));
-    }
-    if (typeof components.port === "number" || typeof components.port === "string") {
-        uriTokens.push(":");
-        uriTokens.push(String(components.port));
-    }
-    return uriTokens.length ? uriTokens.join("") : undefined;
-}
-
-var RDS1 = /^\.\.?\//;
-var RDS2 = /^\/\.(\/|$)/;
-var RDS3 = /^\/\.\.(\/|$)/;
-var RDS5 = /^\/?(?:.|\n)*?(?=\/|$)/;
-function removeDotSegments(input) {
-    var output = [];
-    while (input.length) {
-        if (input.match(RDS1)) {
-            input = input.replace(RDS1, "");
-        } else if (input.match(RDS2)) {
-            input = input.replace(RDS2, "/");
-        } else if (input.match(RDS3)) {
-            input = input.replace(RDS3, "/");
-            output.pop();
-        } else if (input === "." || input === "..") {
-            input = "";
-        } else {
-            var im = input.match(RDS5);
-            if (im) {
-                var s = im[0];
-                input = input.slice(s.length);
-                output.push(s);
-            } else {
-                throw new Error("Unexpected dot segment condition");
-            }
-        }
-    }
-    return output.join("");
-}
-
-function serialize(components) {
-    var options = arguments.length > 1 && arguments[1] !== undefined ? arguments[1] : {};
-
-    var protocol = options.iri ? IRI_PROTOCOL : URI_PROTOCOL;
-    var uriTokens = [];
-    //find scheme handler
-    var schemeHandler = SCHEMES[(options.scheme || components.scheme || "").toLowerCase()];
-    //perform scheme specific serialization
-    if (schemeHandler && schemeHandler.serialize) schemeHandler.serialize(components, options);
-    if (components.host) {
-        //if host component is an IPv6 address
-        if (protocol.IPV6ADDRESS.test(components.host)) {}
-        //TODO: normalize IPv6 address as per RFC 5952
-
-        //if host component is a domain name
-        else if (options.domainHost || schemeHandler && schemeHandler.domainHost) {
-                //convert IDN via punycode
-                try {
-                    components.host = !options.iri ? punycode.toASCII(components.host.replace(protocol.PCT_ENCODED, pctDecChars).toLowerCase()) : punycode.toUnicode(components.host);
-                } catch (e) {
-                    components.error = components.error || "Host's domain name can not be converted to " + (!options.iri ? "ASCII" : "Unicode") + " via punycode: " + e;
-                }
-            }
-    }
-    //normalize encoding
-    _normalizeComponentEncoding(components, protocol);
-    if (options.reference !== "suffix" && components.scheme) {
-        uriTokens.push(components.scheme);
-        uriTokens.push(":");
-    }
-    var authority = _recomposeAuthority(components, options);
-    if (authority !== undefined) {
-        if (options.reference !== "suffix") {
-            uriTokens.push("//");
-        }
-        uriTokens.push(authority);
-        if (components.path && components.path.charAt(0) !== "/") {
-            uriTokens.push("/");
-        }
-    }
-    if (components.path !== undefined) {
-        var s = components.path;
-        if (!options.absolutePath && (!schemeHandler || !schemeHandler.absolutePath)) {
-            s = removeDotSegments(s);
-        }
-        if (authority === undefined) {
-            s = s.replace(/^\/\//, "/%2F"); //don't allow the path to start with "//"
-        }
-        uriTokens.push(s);
-    }
-    if (components.query !== undefined) {
-        uriTokens.push("?");
-        uriTokens.push(components.query);
-    }
-    if (components.fragment !== undefined) {
-        uriTokens.push("#");
-        uriTokens.push(components.fragment);
-    }
-    return uriTokens.join(""); //merge tokens into a string
-}
-
-function resolveComponents(base, relative) {
-    var options = arguments.length > 2 && arguments[2] !== undefined ? arguments[2] : {};
-    var skipNormalization = arguments[3];
-
-    var target = {};
-    if (!skipNormalization) {
-        base = parse(serialize(base, options), options); //normalize base components
-        relative = parse(serialize(relative, options), options); //normalize relative components
-    }
-    options = options || {};
-    if (!options.tolerant && relative.scheme) {
-        target.scheme = relative.scheme;
-        //target.authority = relative.authority;
-        target.userinfo = relative.userinfo;
-        target.host = relative.host;
-        target.port = relative.port;
-        target.path = removeDotSegments(relative.path || "");
-        target.query = relative.query;
-    } else {
-        if (relative.userinfo !== undefined || relative.host !== undefined || relative.port !== undefined) {
-            //target.authority = relative.authority;
-            target.userinfo = relative.userinfo;
-            target.host = relative.host;
-            target.port = relative.port;
-            target.path = removeDotSegments(relative.path || "");
-            target.query = relative.query;
-        } else {
-            if (!relative.path) {
-                target.path = base.path;
-                if (relative.query !== undefined) {
-                    target.query = relative.query;
-                } else {
-                    target.query = base.query;
-                }
-            } else {
-                if (relative.path.charAt(0) === "/") {
-                    target.path = removeDotSegments(relative.path);
-                } else {
-                    if ((base.userinfo !== undefined || base.host !== undefined || base.port !== undefined) && !base.path) {
-                        target.path = "/" + relative.path;
-                    } else if (!base.path) {
-                        target.path = relative.path;
-                    } else {
-                        target.path = base.path.slice(0, base.path.lastIndexOf("/") + 1) + relative.path;
-                    }
-                    target.path = removeDotSegments(target.path);
-                }
-                target.query = relative.query;
-            }
-            //target.authority = base.authority;
-            target.userinfo = base.userinfo;
-            target.host = base.host;
-            target.port = base.port;
-        }
-        target.scheme = base.scheme;
-    }
-    target.fragment = relative.fragment;
-    return target;
-}
-
-function resolve(baseURI, relativeURI, options) {
-    var schemelessOptions = assign({ scheme: 'null' }, options);
-    return serialize(resolveComponents(parse(baseURI, schemelessOptions), parse(relativeURI, schemelessOptions), schemelessOptions, true), schemelessOptions);
-}
-
-function normalize(uri, options) {
-    if (typeof uri === "string") {
-        uri = serialize(parse(uri, options), options);
-    } else if (typeOf(uri) === "object") {
-        uri = parse(serialize(uri, options), options);
-    }
-    return uri;
-}
-
-function equal(uriA, uriB, options) {
-    if (typeof uriA === "string") {
-        uriA = serialize(parse(uriA, options), options);
-    } else if (typeOf(uriA) === "object") {
-        uriA = serialize(uriA, options);
-    }
-    if (typeof uriB === "string") {
-        uriB = serialize(parse(uriB, options), options);
-    } else if (typeOf(uriB) === "object") {
-        uriB = serialize(uriB, options);
-    }
-    return uriA === uriB;
-}
-
-function escapeComponent(str, options) {
-    return str && str.toString().replace(!options || !options.iri ? URI_PROTOCOL.ESCAPE : IRI_PROTOCOL.ESCAPE, pctEncChar);
-}
-
-function unescapeComponent(str, options) {
-    return str && str.toString().replace(!options || !options.iri ? URI_PROTOCOL.PCT_ENCODED : IRI_PROTOCOL.PCT_ENCODED, pctDecChars);
-}
-
-var handler = {
-    scheme: "http",
-    domainHost: true,
-    parse: function parse(components, options) {
-        //report missing host
-        if (!components.host) {
-            components.error = components.error || "HTTP URIs must have a host.";
-        }
-        return components;
-    },
-    serialize: function serialize(components, options) {
-        var secure = String(components.scheme).toLowerCase() === "https";
-        //normalize the default port
-        if (components.port === (secure ? 443 : 80) || components.port === "") {
-            components.port = undefined;
-        }
-        //normalize the empty path
-        if (!components.path) {
-            components.path = "/";
-        }
-        //NOTE: We do not parse query strings for HTTP URIs
-        //as WWW Form Url Encoded query strings are part of the HTML4+ spec,
-        //and not the HTTP spec.
-        return components;
-    }
-};
-
-var handler$1 = {
-    scheme: "https",
-    domainHost: handler.domainHost,
-    parse: handler.parse,
-    serialize: handler.serialize
-};
-
-function isSecure(wsComponents) {
-    return typeof wsComponents.secure === 'boolean' ? wsComponents.secure : String(wsComponents.scheme).toLowerCase() === "wss";
-}
-//RFC 6455
-var handler$2 = {
-    scheme: "ws",
-    domainHost: true,
-    parse: function parse(components, options) {
-        var wsComponents = components;
-        //indicate if the secure flag is set
-        wsComponents.secure = isSecure(wsComponents);
-        //construct resouce name
-        wsComponents.resourceName = (wsComponents.path || '/') + (wsComponents.query ? '?' + wsComponents.query : '');
-        wsComponents.path = undefined;
-        wsComponents.query = undefined;
-        return wsComponents;
-    },
-    serialize: function serialize(wsComponents, options) {
-        //normalize the default port
-        if (wsComponents.port === (isSecure(wsComponents) ? 443 : 80) || wsComponents.port === "") {
-            wsComponents.port = undefined;
-        }
-        //ensure scheme matches secure flag
-        if (typeof wsComponents.secure === 'boolean') {
-            wsComponents.scheme = wsComponents.secure ? 'wss' : 'ws';
-            wsComponents.secure = undefined;
-        }
-        //reconstruct path from resource name
-        if (wsComponents.resourceName) {
-            var _wsComponents$resourc = wsComponents.resourceName.split('?'),
-                _wsComponents$resourc2 = slicedToArray(_wsComponents$resourc, 2),
-                path = _wsComponents$resourc2[0],
-                query = _wsComponents$resourc2[1];
-
-            wsComponents.path = path && path !== '/' ? path : undefined;
-            wsComponents.query = query;
-            wsComponents.resourceName = undefined;
-        }
-        //forbid fragment component
-        wsComponents.fragment = undefined;
-        return wsComponents;
-    }
-};
-
-var handler$3 = {
-    scheme: "wss",
-    domainHost: handler$2.domainHost,
-    parse: handler$2.parse,
-    serialize: handler$2.serialize
-};
-
-var O = {};
-var isIRI = true;
-//RFC 3986
-var UNRESERVED$$ = "[A-Za-z0-9\\-\\.\\_\\~" + (isIRI ? "\\xA0-\\u200D\\u2010-\\u2029\\u202F-\\uD7FF\\uF900-\\uFDCF\\uFDF0-\\uFFEF" : "") + "]";
-var HEXDIG$$ = "[0-9A-Fa-f]"; //case-insensitive
-var PCT_ENCODED$ = subexp(subexp("%[EFef]" + HEXDIG$$ + "%" + HEXDIG$$ + HEXDIG$$ + "%" + HEXDIG$$ + HEXDIG$$) + "|" + subexp("%[89A-Fa-f]" + HEXDIG$$ + "%" + HEXDIG$$ + HEXDIG$$) + "|" + subexp("%" + HEXDIG$$ + HEXDIG$$)); //expanded
-//RFC 5322, except these symbols as per RFC 6068: @ : / ? # [ ] & ; =
-//const ATEXT$$ = "[A-Za-z0-9\\!\\#\\$\\%\\&\\'\\*\\+\\-\\/\\=\\?\\^\\_\\`\\{\\|\\}\\~]";
-//const WSP$$ = "[\\x20\\x09]";
-//const OBS_QTEXT$$ = "[\\x01-\\x08\\x0B\\x0C\\x0E-\\x1F\\x7F]";  //(%d1-8 / %d11-12 / %d14-31 / %d127)
-//const QTEXT$$ = merge("[\\x21\\x23-\\x5B\\x5D-\\x7E]", OBS_QTEXT$$);  //%d33 / %d35-91 / %d93-126 / obs-qtext
-//const VCHAR$$ = "[\\x21-\\x7E]";
-//const WSP$$ = "[\\x20\\x09]";
-//const OBS_QP$ = subexp("\\\\" + merge("[\\x00\\x0D\\x0A]", OBS_QTEXT$$));  //%d0 / CR / LF / obs-qtext
-//const FWS$ = subexp(subexp(WSP$$ + "*" + "\\x0D\\x0A") + "?" + WSP$$ + "+");
-//const QUOTED_PAIR$ = subexp(subexp("\\\\" + subexp(VCHAR$$ + "|" + WSP$$)) + "|" + OBS_QP$);
-//const QUOTED_STRING$ = subexp('\\"' + subexp(FWS$ + "?" + QCONTENT$) + "*" + FWS$ + "?" + '\\"');
-var ATEXT$$ = "[A-Za-z0-9\\!\\$\\%\\'\\*\\+\\-\\^\\_\\`\\{\\|\\}\\~]";
-var QTEXT$$ = "[\\!\\$\\%\\'\\(\\)\\*\\+\\,\\-\\.0-9\\<\\>A-Z\\x5E-\\x7E]";
-var VCHAR$$ = merge(QTEXT$$, "[\\\"\\\\]");
-var SOME_DELIMS$$ = "[\\!\\$\\'\\(\\)\\*\\+\\,\\;\\:\\@]";
-var UNRESERVED = new RegExp(UNRESERVED$$, "g");
-var PCT_ENCODED = new RegExp(PCT_ENCODED$, "g");
-var NOT_LOCAL_PART = new RegExp(merge("[^]", ATEXT$$, "[\\.]", '[\\"]', VCHAR$$), "g");
-var NOT_HFNAME = new RegExp(merge("[^]", UNRESERVED$$, SOME_DELIMS$$), "g");
-var NOT_HFVALUE = NOT_HFNAME;
-function decodeUnreserved(str) {
-    var decStr = pctDecChars(str);
-    return !decStr.match(UNRESERVED) ? str : decStr;
-}
-var handler$4 = {
-    scheme: "mailto",
-    parse: function parse$$1(components, options) {
-        var mailtoComponents = components;
-        var to = mailtoComponents.to = mailtoComponents.path ? mailtoComponents.path.split(",") : [];
-        mailtoComponents.path = undefined;
-        if (mailtoComponents.query) {
-            var unknownHeaders = false;
-            var headers = {};
-            var hfields = mailtoComponents.query.split("&");
-            for (var x = 0, xl = hfields.length; x < xl; ++x) {
-                var hfield = hfields[x].split("=");
-                switch (hfield[0]) {
-                    case "to":
-                        var toAddrs = hfield[1].split(",");
-                        for (var _x = 0, _xl = toAddrs.length; _x < _xl; ++_x) {
-                            to.push(toAddrs[_x]);
-                        }
-                        break;
-                    case "subject":
-                        mailtoComponents.subject = unescapeComponent(hfield[1], options);
-                        break;
-                    case "body":
-                        mailtoComponents.body = unescapeComponent(hfield[1], options);
-                        break;
-                    default:
-                        unknownHeaders = true;
-                        headers[unescapeComponent(hfield[0], options)] = unescapeComponent(hfield[1], options);
-                        break;
-                }
-            }
-            if (unknownHeaders) mailtoComponents.headers = headers;
-        }
-        mailtoComponents.query = undefined;
-        for (var _x2 = 0, _xl2 = to.length; _x2 < _xl2; ++_x2) {
-            var addr = to[_x2].split("@");
-            addr[0] = unescapeComponent(addr[0]);
-            if (!options.unicodeSupport) {
-                //convert Unicode IDN -> ASCII IDN
-                try {
-                    addr[1] = punycode.toASCII(unescapeComponent(addr[1], options).toLowerCase());
-                } catch (e) {
-                    mailtoComponents.error = mailtoComponents.error || "Email address's domain name can not be converted to ASCII via punycode: " + e;
-                }
-            } else {
-                addr[1] = unescapeComponent(addr[1], options).toLowerCase();
-            }
-            to[_x2] = addr.join("@");
-        }
-        return mailtoComponents;
-    },
-    serialize: function serialize$$1(mailtoComponents, options) {
-        var components = mailtoComponents;
-        var to = toArray(mailtoComponents.to);
-        if (to) {
-            for (var x = 0, xl = to.length; x < xl; ++x) {
-                var toAddr = String(to[x]);
-                var atIdx = toAddr.lastIndexOf("@");
-                var localPart = toAddr.slice(0, atIdx).replace(PCT_ENCODED, decodeUnreserved).replace(PCT_ENCODED, toUpperCase).replace(NOT_LOCAL_PART, pctEncChar);
-                var domain = toAddr.slice(atIdx + 1);
-                //convert IDN via punycode
-                try {
-                    domain = !options.iri ? punycode.toASCII(unescapeComponent(domain, options).toLowerCase()) : punycode.toUnicode(domain);
-                } catch (e) {
-                    components.error = components.error || "Email address's domain name can not be converted to " + (!options.iri ? "ASCII" : "Unicode") + " via punycode: " + e;
-                }
-                to[x] = localPart + "@" + domain;
-            }
-            components.path = to.join(",");
-        }
-        var headers = mailtoComponents.headers = mailtoComponents.headers || {};
-        if (mailtoComponents.subject) headers["subject"] = mailtoComponents.subject;
-        if (mailtoComponents.body) headers["body"] = mailtoComponents.body;
-        var fields = [];
-        for (var name in headers) {
-            if (headers[name] !== O[name]) {
-                fields.push(name.replace(PCT_ENCODED, decodeUnreserved).replace(PCT_ENCODED, toUpperCase).replace(NOT_HFNAME, pctEncChar) + "=" + headers[name].replace(PCT_ENCODED, decodeUnreserved).replace(PCT_ENCODED, toUpperCase).replace(NOT_HFVALUE, pctEncChar));
-            }
-        }
-        if (fields.length) {
-            components.query = fields.join("&");
-        }
-        return components;
-    }
-};
-
-var URN_PARSE = /^([^\:]+)\:(.*)/;
-//RFC 2141
-var handler$5 = {
-    scheme: "urn",
-    parse: function parse$$1(components, options) {
-        var matches = components.path && components.path.match(URN_PARSE);
-        var urnComponents = components;
-        if (matches) {
-            var scheme = options.scheme || urnComponents.scheme || "urn";
-            var nid = matches[1].toLowerCase();
-            var nss = matches[2];
-            var urnScheme = scheme + ":" + (options.nid || nid);
-            var schemeHandler = SCHEMES[urnScheme];
-            urnComponents.nid = nid;
-            urnComponents.nss = nss;
-            urnComponents.path = undefined;
-            if (schemeHandler) {
-                urnComponents = schemeHandler.parse(urnComponents, options);
-            }
-        } else {
-            urnComponents.error = urnComponents.error || "URN can not be parsed.";
-        }
-        return urnComponents;
-    },
-    serialize: function serialize$$1(urnComponents, options) {
-        var scheme = options.scheme || urnComponents.scheme || "urn";
-        var nid = urnComponents.nid;
-        var urnScheme = scheme + ":" + (options.nid || nid);
-        var schemeHandler = SCHEMES[urnScheme];
-        if (schemeHandler) {
-            urnComponents = schemeHandler.serialize(urnComponents, options);
-        }
-        var uriComponents = urnComponents;
-        var nss = urnComponents.nss;
-        uriComponents.path = (nid || options.nid) + ":" + nss;
-        return uriComponents;
-    }
-};
-
-var UUID = /^[0-9A-Fa-f]{8}(?:\-[0-9A-Fa-f]{4}){3}\-[0-9A-Fa-f]{12}$/;
-//RFC 4122
-var handler$6 = {
-    scheme: "urn:uuid",
-    parse: function parse(urnComponents, options) {
-        var uuidComponents = urnComponents;
-        uuidComponents.uuid = uuidComponents.nss;
-        uuidComponents.nss = undefined;
-        if (!options.tolerant && (!uuidComponents.uuid || !uuidComponents.uuid.match(UUID))) {
-            uuidComponents.error = uuidComponents.error || "UUID is not valid.";
-        }
-        return uuidComponents;
-    },
-    serialize: function serialize(uuidComponents, options) {
-        var urnComponents = uuidComponents;
-        //normalize UUID
-        urnComponents.nss = (uuidComponents.uuid || "").toLowerCase();
-        return urnComponents;
-    }
-};
-
-SCHEMES[handler.scheme] = handler;
-SCHEMES[handler$1.scheme] = handler$1;
-SCHEMES[handler$2.scheme] = handler$2;
-SCHEMES[handler$3.scheme] = handler$3;
-SCHEMES[handler$4.scheme] = handler$4;
-SCHEMES[handler$5.scheme] = handler$5;
-SCHEMES[handler$6.scheme] = handler$6;
-
-exports.SCHEMES = SCHEMES;
-exports.pctEncChar = pctEncChar;
-exports.pctDecChars = pctDecChars;
-exports.parse = parse;
-exports.removeDotSegments = removeDotSegments;
-exports.serialize = serialize;
-exports.resolveComponents = resolveComponents;
-exports.resolve = resolve;
-exports.normalize = normalize;
-exports.equal = equal;
-exports.escapeComponent = escapeComponent;
-exports.unescapeComponent = unescapeComponent;
-
-Object.defineProperty(exports, '__esModule', { value: true });
-
-})));
-//# sourceMappingURL=uri.all.js.map
-
-
-/***/ }),
-
 /***/ 65278:
 /***/ ((module, __unused_webpack_exports, __nccwpck_require__) => {
 
@@ -111397,6 +109966,7 @@ async function main () {
   const techAccId = core.getInput('technicalAccountId')
   const techAccEmail = core.getInput('technicalAccountEmail')
   const imsOrgId = core.getInput('imsOrgId')
+  const forceDeploy = core.getInput('forceDeploy')
 
   // check command
   if (!command) {
@@ -111415,6 +109985,9 @@ async function main () {
         let deployCmd = 'aio app deploy --no-build'
         if (noPublish === 'true') {
           deployCmd = `${deployCmd} --no-publish`
+        }
+        if (forceDeploy === 'true') {
+          deployCmd = `${deployCmd} --force-deploy`
         }
         console.log(`Executing command ${command}!`)
         await runCLICommand(exec, os, [
@@ -112071,7 +110644,7 @@ module.exports = require("zlib");
 // Licensed under the MIT license.
 Object.defineProperty(exports, "__esModule", ({ value: true }));
 exports.DEFAULT_RETRY_POLICY_COUNT = exports.SDK_VERSION = void 0;
-exports.SDK_VERSION = "1.16.0";
+exports.SDK_VERSION = "1.16.2";
 exports.DEFAULT_RETRY_POLICY_COUNT = 3;
 //# sourceMappingURL=constants.js.map
 
@@ -112085,7 +110658,7 @@ exports.DEFAULT_RETRY_POLICY_COUNT = 3;
 // Copyright (c) Microsoft Corporation.
 // Licensed under the MIT license.
 Object.defineProperty(exports, "__esModule", ({ value: true }));
-exports.createPipelineFromOptions = void 0;
+exports.createPipelineFromOptions = createPipelineFromOptions;
 const logPolicy_js_1 = __nccwpck_require__(46821);
 const pipeline_js_1 = __nccwpck_require__(83906);
 const redirectPolicy_js_1 = __nccwpck_require__(98526);
@@ -112121,7 +110694,9 @@ function createPipelineFromOptions(options) {
     // properties (e.g., making the boundary constant in recorded tests).
     pipeline.addPolicy((0, multipartPolicy_js_1.multipartPolicy)(), { afterPhase: "Deserialize" });
     pipeline.addPolicy((0, defaultRetryPolicy_js_1.defaultRetryPolicy)(options.retryOptions), { phase: "Retry" });
-    pipeline.addPolicy((0, tracingPolicy_js_1.tracingPolicy)(options.userAgentOptions), { afterPhase: "Retry" });
+    pipeline.addPolicy((0, tracingPolicy_js_1.tracingPolicy)(Object.assign(Object.assign({}, options.userAgentOptions), options.loggingOptions)), {
+        afterPhase: "Retry",
+    });
     if (core_util_1.isNodeLike) {
         // Both XHR and Fetch expect to handle redirects automatically,
         // so only include this policy when we're in Node.
@@ -112130,7 +110705,6 @@ function createPipelineFromOptions(options) {
     pipeline.addPolicy((0, logPolicy_js_1.logPolicy)(options.loggingOptions), { afterPhase: "Sign" });
     return pipeline;
 }
-exports.createPipelineFromOptions = createPipelineFromOptions;
 //# sourceMappingURL=createPipelineFromOptions.js.map
 
 /***/ }),
@@ -112143,7 +110717,7 @@ exports.createPipelineFromOptions = createPipelineFromOptions;
 // Copyright (c) Microsoft Corporation.
 // Licensed under the MIT license.
 Object.defineProperty(exports, "__esModule", ({ value: true }));
-exports.createDefaultHttpClient = void 0;
+exports.createDefaultHttpClient = createDefaultHttpClient;
 const nodeHttpClient_js_1 = __nccwpck_require__(49463);
 /**
  * Create the correct HttpClient for the current environment.
@@ -112151,7 +110725,6 @@ const nodeHttpClient_js_1 = __nccwpck_require__(49463);
 function createDefaultHttpClient() {
     return (0, nodeHttpClient_js_1.createNodeHttpClient)();
 }
-exports.createDefaultHttpClient = createDefaultHttpClient;
 //# sourceMappingURL=defaultHttpClient.js.map
 
 /***/ }),
@@ -112164,7 +110737,7 @@ exports.createDefaultHttpClient = createDefaultHttpClient;
 // Copyright (c) Microsoft Corporation.
 // Licensed under the MIT license.
 Object.defineProperty(exports, "__esModule", ({ value: true }));
-exports.createHttpHeaders = void 0;
+exports.createHttpHeaders = createHttpHeaders;
 function normalizeName(name) {
     return name.toLowerCase();
 }
@@ -112251,7 +110824,6 @@ class HttpHeadersImpl {
 function createHttpHeaders(rawHeaders) {
     return new HttpHeadersImpl(rawHeaders);
 }
-exports.createHttpHeaders = createHttpHeaders;
 //# sourceMappingURL=httpHeaders.js.map
 
 /***/ }),
@@ -112361,7 +110933,8 @@ exports.logger = (0, logger_1.createClientLogger)("core-rest-pipeline");
 // Copyright (c) Microsoft Corporation.
 // Licensed under the MIT license.
 Object.defineProperty(exports, "__esModule", ({ value: true }));
-exports.createNodeHttpClient = exports.getBodyLength = void 0;
+exports.getBodyLength = getBodyLength;
+exports.createNodeHttpClient = createNodeHttpClient;
 const tslib_1 = __nccwpck_require__(89679);
 const http = tslib_1.__importStar(__nccwpck_require__(88849));
 const https = tslib_1.__importStar(__nccwpck_require__(22286));
@@ -112685,7 +111258,6 @@ function getBodyLength(body) {
         return null;
     }
 }
-exports.getBodyLength = getBodyLength;
 /**
  * Create a new HttpClient instance for the NodeJS environment.
  * @internal
@@ -112693,7 +111265,6 @@ exports.getBodyLength = getBodyLength;
 function createNodeHttpClient() {
     return new NodeHttpClient();
 }
-exports.createNodeHttpClient = createNodeHttpClient;
 //# sourceMappingURL=nodeHttpClient.js.map
 
 /***/ }),
@@ -112706,7 +111277,7 @@ exports.createNodeHttpClient = createNodeHttpClient;
 // Copyright (c) Microsoft Corporation.
 // Licensed under the MIT license.
 Object.defineProperty(exports, "__esModule", ({ value: true }));
-exports.createEmptyPipeline = void 0;
+exports.createEmptyPipeline = createEmptyPipeline;
 const ValidPhaseNames = new Set(["Deserialize", "Serialize", "Retry", "Sign"]);
 /**
  * A private implementation of Pipeline.
@@ -112966,7 +111537,6 @@ class HttpPipeline {
 function createEmptyPipeline() {
     return HttpPipeline.create();
 }
-exports.createEmptyPipeline = createEmptyPipeline;
 //# sourceMappingURL=pipeline.js.map
 
 /***/ }),
@@ -112979,7 +111549,7 @@ exports.createEmptyPipeline = createEmptyPipeline;
 // Copyright (c) Microsoft Corporation.
 // Licensed under the MIT license.
 Object.defineProperty(exports, "__esModule", ({ value: true }));
-exports.createPipelineRequest = void 0;
+exports.createPipelineRequest = createPipelineRequest;
 const httpHeaders_js_1 = __nccwpck_require__(60118);
 const core_util_1 = __nccwpck_require__(80637);
 class PipelineRequestImpl {
@@ -113013,7 +111583,6 @@ class PipelineRequestImpl {
 function createPipelineRequest(options) {
     return new PipelineRequestImpl(options);
 }
-exports.createPipelineRequest = createPipelineRequest;
 //# sourceMappingURL=pipelineRequest.js.map
 
 /***/ }),
@@ -113026,7 +111595,8 @@ exports.createPipelineRequest = createPipelineRequest;
 // Copyright (c) Microsoft Corporation.
 // Licensed under the MIT license.
 Object.defineProperty(exports, "__esModule", ({ value: true }));
-exports.auxiliaryAuthenticationHeaderPolicy = exports.auxiliaryAuthenticationHeaderPolicyName = void 0;
+exports.auxiliaryAuthenticationHeaderPolicyName = void 0;
+exports.auxiliaryAuthenticationHeaderPolicy = auxiliaryAuthenticationHeaderPolicy;
 const tokenCycler_js_1 = __nccwpck_require__(50601);
 const log_js_1 = __nccwpck_require__(30648);
 /**
@@ -113087,7 +111657,6 @@ function auxiliaryAuthenticationHeaderPolicy(options) {
         },
     };
 }
-exports.auxiliaryAuthenticationHeaderPolicy = auxiliaryAuthenticationHeaderPolicy;
 //# sourceMappingURL=auxiliaryAuthenticationHeaderPolicy.js.map
 
 /***/ }),
@@ -113100,7 +111669,8 @@ exports.auxiliaryAuthenticationHeaderPolicy = auxiliaryAuthenticationHeaderPolic
 // Copyright (c) Microsoft Corporation.
 // Licensed under the MIT license.
 Object.defineProperty(exports, "__esModule", ({ value: true }));
-exports.bearerTokenAuthenticationPolicy = exports.bearerTokenAuthenticationPolicyName = void 0;
+exports.bearerTokenAuthenticationPolicyName = void 0;
+exports.bearerTokenAuthenticationPolicy = bearerTokenAuthenticationPolicy;
 const tokenCycler_js_1 = __nccwpck_require__(50601);
 const log_js_1 = __nccwpck_require__(30648);
 /**
@@ -113206,7 +111776,6 @@ function bearerTokenAuthenticationPolicy(options) {
         },
     };
 }
-exports.bearerTokenAuthenticationPolicy = bearerTokenAuthenticationPolicy;
 //# sourceMappingURL=bearerTokenAuthenticationPolicy.js.map
 
 /***/ }),
@@ -113219,7 +111788,8 @@ exports.bearerTokenAuthenticationPolicy = bearerTokenAuthenticationPolicy;
 // Copyright (c) Microsoft Corporation.
 // Licensed under the MIT license.
 Object.defineProperty(exports, "__esModule", ({ value: true }));
-exports.decompressResponsePolicy = exports.decompressResponsePolicyName = void 0;
+exports.decompressResponsePolicyName = void 0;
+exports.decompressResponsePolicy = decompressResponsePolicy;
 /**
  * The programmatic identifier of the decompressResponsePolicy.
  */
@@ -113240,7 +111810,6 @@ function decompressResponsePolicy() {
         },
     };
 }
-exports.decompressResponsePolicy = decompressResponsePolicy;
 //# sourceMappingURL=decompressResponsePolicy.js.map
 
 /***/ }),
@@ -113253,7 +111822,8 @@ exports.decompressResponsePolicy = decompressResponsePolicy;
 // Copyright (c) Microsoft Corporation.
 // Licensed under the MIT license.
 Object.defineProperty(exports, "__esModule", ({ value: true }));
-exports.defaultRetryPolicy = exports.defaultRetryPolicyName = void 0;
+exports.defaultRetryPolicyName = void 0;
+exports.defaultRetryPolicy = defaultRetryPolicy;
 const exponentialRetryStrategy_js_1 = __nccwpck_require__(843);
 const throttlingRetryStrategy_js_1 = __nccwpck_require__(66645);
 const retryPolicy_js_1 = __nccwpck_require__(39700);
@@ -113277,7 +111847,6 @@ function defaultRetryPolicy(options = {}) {
         }).sendRequest,
     };
 }
-exports.defaultRetryPolicy = defaultRetryPolicy;
 //# sourceMappingURL=defaultRetryPolicy.js.map
 
 /***/ }),
@@ -113290,7 +111859,8 @@ exports.defaultRetryPolicy = defaultRetryPolicy;
 // Copyright (c) Microsoft Corporation.
 // Licensed under the MIT license.
 Object.defineProperty(exports, "__esModule", ({ value: true }));
-exports.exponentialRetryPolicy = exports.exponentialRetryPolicyName = void 0;
+exports.exponentialRetryPolicyName = void 0;
+exports.exponentialRetryPolicy = exponentialRetryPolicy;
 const exponentialRetryStrategy_js_1 = __nccwpck_require__(843);
 const retryPolicy_js_1 = __nccwpck_require__(39700);
 const constants_js_1 = __nccwpck_require__(32565);
@@ -113310,7 +111880,6 @@ function exponentialRetryPolicy(options = {}) {
         maxRetries: (_a = options.maxRetries) !== null && _a !== void 0 ? _a : constants_js_1.DEFAULT_RETRY_POLICY_COUNT,
     });
 }
-exports.exponentialRetryPolicy = exponentialRetryPolicy;
 //# sourceMappingURL=exponentialRetryPolicy.js.map
 
 /***/ }),
@@ -113323,7 +111892,8 @@ exports.exponentialRetryPolicy = exponentialRetryPolicy;
 // Copyright (c) Microsoft Corporation.
 // Licensed under the MIT license.
 Object.defineProperty(exports, "__esModule", ({ value: true }));
-exports.formDataPolicy = exports.formDataPolicyName = void 0;
+exports.formDataPolicyName = void 0;
+exports.formDataPolicy = formDataPolicy;
 const core_util_1 = __nccwpck_require__(80637);
 const httpHeaders_js_1 = __nccwpck_require__(60118);
 /**
@@ -113364,7 +111934,6 @@ function formDataPolicy() {
         },
     };
 }
-exports.formDataPolicy = formDataPolicy;
 function wwwFormUrlEncode(formData) {
     const urlSearchParams = new URLSearchParams();
     for (const [key, value] of Object.entries(formData)) {
@@ -113430,7 +111999,8 @@ async function prepareFormData(formData, request) {
 // Copyright (c) Microsoft Corporation.
 // Licensed under the MIT license.
 Object.defineProperty(exports, "__esModule", ({ value: true }));
-exports.logPolicy = exports.logPolicyName = void 0;
+exports.logPolicyName = void 0;
+exports.logPolicy = logPolicy;
 const log_js_1 = __nccwpck_require__(30648);
 const sanitizer_js_1 = __nccwpck_require__(34472);
 /**
@@ -113462,7 +112032,6 @@ function logPolicy(options = {}) {
         },
     };
 }
-exports.logPolicy = logPolicy;
 //# sourceMappingURL=logPolicy.js.map
 
 /***/ }),
@@ -113475,7 +112044,8 @@ exports.logPolicy = logPolicy;
 // Copyright (c) Microsoft Corporation.
 // Licensed under the MIT license.
 Object.defineProperty(exports, "__esModule", ({ value: true }));
-exports.multipartPolicy = exports.multipartPolicyName = void 0;
+exports.multipartPolicyName = void 0;
+exports.multipartPolicy = multipartPolicy;
 const core_util_1 = __nccwpck_require__(80637);
 const concat_js_1 = __nccwpck_require__(80107);
 const typeGuards_js_1 = __nccwpck_require__(58520);
@@ -113584,7 +112154,6 @@ function multipartPolicy() {
         },
     };
 }
-exports.multipartPolicy = multipartPolicy;
 //# sourceMappingURL=multipartPolicy.js.map
 
 /***/ }),
@@ -113597,7 +112166,8 @@ exports.multipartPolicy = multipartPolicy;
 // Copyright (c) Microsoft Corporation.
 // Licensed under the MIT license.
 Object.defineProperty(exports, "__esModule", ({ value: true }));
-exports.ndJsonPolicy = exports.ndJsonPolicyName = void 0;
+exports.ndJsonPolicyName = void 0;
+exports.ndJsonPolicy = ndJsonPolicy;
 /**
  * The programmatic identifier of the ndJsonPolicy.
  */
@@ -113620,7 +112190,6 @@ function ndJsonPolicy() {
         },
     };
 }
-exports.ndJsonPolicy = ndJsonPolicy;
 //# sourceMappingURL=ndJsonPolicy.js.map
 
 /***/ }),
@@ -113633,7 +112202,10 @@ exports.ndJsonPolicy = ndJsonPolicy;
 // Copyright (c) Microsoft Corporation.
 // Licensed under the MIT license.
 Object.defineProperty(exports, "__esModule", ({ value: true }));
-exports.proxyPolicy = exports.getDefaultProxySettings = exports.loadNoProxy = exports.globalNoProxyList = exports.proxyPolicyName = void 0;
+exports.globalNoProxyList = exports.proxyPolicyName = void 0;
+exports.loadNoProxy = loadNoProxy;
+exports.getDefaultProxySettings = getDefaultProxySettings;
+exports.proxyPolicy = proxyPolicy;
 const https_proxy_agent_1 = __nccwpck_require__(4941);
 const http_proxy_agent_1 = __nccwpck_require__(4654);
 const log_js_1 = __nccwpck_require__(30648);
@@ -113718,7 +112290,6 @@ function loadNoProxy() {
     }
     return [];
 }
-exports.loadNoProxy = loadNoProxy;
 /**
  * This method converts a proxy url into `ProxySettings` for use with ProxyPolicy.
  * If no argument is given, it attempts to parse a proxy URL from the environment
@@ -113742,7 +112313,6 @@ function getDefaultProxySettings(proxyUrl) {
         password: parsedUrl.password,
     };
 }
-exports.getDefaultProxySettings = getDefaultProxySettings;
 /**
  * This method attempts to parse a proxy URL from the environment
  * variables `HTTPS_PROXY` or `HTTP_PROXY`.
@@ -113824,7 +112394,6 @@ function proxyPolicy(proxySettings, options) {
         },
     };
 }
-exports.proxyPolicy = proxyPolicy;
 //# sourceMappingURL=proxyPolicy.js.map
 
 /***/ }),
@@ -113837,7 +112406,8 @@ exports.proxyPolicy = proxyPolicy;
 // Copyright (c) Microsoft Corporation.
 // Licensed under the MIT license.
 Object.defineProperty(exports, "__esModule", ({ value: true }));
-exports.redirectPolicy = exports.redirectPolicyName = void 0;
+exports.redirectPolicyName = void 0;
+exports.redirectPolicy = redirectPolicy;
 /**
  * The programmatic identifier of the redirectPolicy.
  */
@@ -113862,7 +112432,6 @@ function redirectPolicy(options = {}) {
         },
     };
 }
-exports.redirectPolicy = redirectPolicy;
 async function handleRedirect(next, response, maxRetries, currentRetries = 0) {
     const { request, status, headers } = response;
     const locationHeader = headers.get("location");
@@ -113900,7 +112469,7 @@ async function handleRedirect(next, response, maxRetries, currentRetries = 0) {
 // Copyright (c) Microsoft Corporation.
 // Licensed under the MIT license.
 Object.defineProperty(exports, "__esModule", ({ value: true }));
-exports.retryPolicy = void 0;
+exports.retryPolicy = retryPolicy;
 const helpers_js_1 = __nccwpck_require__(21333);
 const logger_1 = __nccwpck_require__(89497);
 const abort_controller_1 = __nccwpck_require__(11514);
@@ -114004,7 +112573,6 @@ function retryPolicy(strategies, options = { maxRetries: constants_js_1.DEFAULT_
         },
     };
 }
-exports.retryPolicy = retryPolicy;
 //# sourceMappingURL=retryPolicy.js.map
 
 /***/ }),
@@ -114017,7 +112585,8 @@ exports.retryPolicy = retryPolicy;
 // Copyright (c) Microsoft Corporation.
 // Licensed under the MIT license.
 Object.defineProperty(exports, "__esModule", ({ value: true }));
-exports.setClientRequestIdPolicy = exports.setClientRequestIdPolicyName = void 0;
+exports.setClientRequestIdPolicyName = void 0;
+exports.setClientRequestIdPolicy = setClientRequestIdPolicy;
 /**
  * The programmatic identifier of the setClientRequestIdPolicy.
  */
@@ -114039,7 +112608,6 @@ function setClientRequestIdPolicy(requestIdHeaderName = "x-ms-client-request-id"
         },
     };
 }
-exports.setClientRequestIdPolicy = setClientRequestIdPolicy;
 //# sourceMappingURL=setClientRequestIdPolicy.js.map
 
 /***/ }),
@@ -114052,7 +112620,8 @@ exports.setClientRequestIdPolicy = setClientRequestIdPolicy;
 // Copyright (c) Microsoft Corporation.
 // Licensed under the MIT license.
 Object.defineProperty(exports, "__esModule", ({ value: true }));
-exports.systemErrorRetryPolicy = exports.systemErrorRetryPolicyName = void 0;
+exports.systemErrorRetryPolicyName = void 0;
+exports.systemErrorRetryPolicy = systemErrorRetryPolicy;
 const exponentialRetryStrategy_js_1 = __nccwpck_require__(843);
 const retryPolicy_js_1 = __nccwpck_require__(39700);
 const constants_js_1 = __nccwpck_require__(32565);
@@ -114077,7 +112646,6 @@ function systemErrorRetryPolicy(options = {}) {
         }).sendRequest,
     };
 }
-exports.systemErrorRetryPolicy = systemErrorRetryPolicy;
 //# sourceMappingURL=systemErrorRetryPolicy.js.map
 
 /***/ }),
@@ -114090,7 +112658,8 @@ exports.systemErrorRetryPolicy = systemErrorRetryPolicy;
 // Copyright (c) Microsoft Corporation.
 // Licensed under the MIT license.
 Object.defineProperty(exports, "__esModule", ({ value: true }));
-exports.throttlingRetryPolicy = exports.throttlingRetryPolicyName = void 0;
+exports.throttlingRetryPolicyName = void 0;
+exports.throttlingRetryPolicy = throttlingRetryPolicy;
 const throttlingRetryStrategy_js_1 = __nccwpck_require__(66645);
 const retryPolicy_js_1 = __nccwpck_require__(39700);
 const constants_js_1 = __nccwpck_require__(32565);
@@ -114117,7 +112686,6 @@ function throttlingRetryPolicy(options = {}) {
         }).sendRequest,
     };
 }
-exports.throttlingRetryPolicy = throttlingRetryPolicy;
 //# sourceMappingURL=throttlingRetryPolicy.js.map
 
 /***/ }),
@@ -114130,7 +112698,8 @@ exports.throttlingRetryPolicy = throttlingRetryPolicy;
 // Copyright (c) Microsoft Corporation.
 // Licensed under the MIT license.
 Object.defineProperty(exports, "__esModule", ({ value: true }));
-exports.tlsPolicy = exports.tlsPolicyName = void 0;
+exports.tlsPolicyName = void 0;
+exports.tlsPolicy = tlsPolicy;
 /**
  * Name of the TLS Policy
  */
@@ -114150,7 +112719,6 @@ function tlsPolicy(tlsSettings) {
         },
     };
 }
-exports.tlsPolicy = tlsPolicy;
 //# sourceMappingURL=tlsPolicy.js.map
 
 /***/ }),
@@ -114163,13 +112731,15 @@ exports.tlsPolicy = tlsPolicy;
 // Copyright (c) Microsoft Corporation.
 // Licensed under the MIT license.
 Object.defineProperty(exports, "__esModule", ({ value: true }));
-exports.tracingPolicy = exports.tracingPolicyName = void 0;
+exports.tracingPolicyName = void 0;
+exports.tracingPolicy = tracingPolicy;
 const core_tracing_1 = __nccwpck_require__(19363);
 const constants_js_1 = __nccwpck_require__(32565);
 const userAgent_js_1 = __nccwpck_require__(96158);
 const log_js_1 = __nccwpck_require__(30648);
 const core_util_1 = __nccwpck_require__(80637);
 const restError_js_1 = __nccwpck_require__(61036);
+const sanitizer_js_1 = __nccwpck_require__(34472);
 /**
  * The programmatic identifier of the tracingPolicy.
  */
@@ -114181,7 +112751,10 @@ exports.tracingPolicyName = "tracingPolicy";
  * @param options - Options to configure the telemetry logged by the tracing policy.
  */
 function tracingPolicy(options = {}) {
-    const userAgent = (0, userAgent_js_1.getUserAgentValue)(options.userAgentPrefix);
+    const userAgentPromise = (0, userAgent_js_1.getUserAgentValue)(options.userAgentPrefix);
+    const sanitizer = new sanitizer_js_1.Sanitizer({
+        additionalAllowedQueryParameters: options.additionalAllowedQueryParameters,
+    });
     const tracingClient = tryCreateTracingClient();
     return {
         name: exports.tracingPolicyName,
@@ -114190,7 +112763,17 @@ function tracingPolicy(options = {}) {
             if (!tracingClient || !((_a = request.tracingOptions) === null || _a === void 0 ? void 0 : _a.tracingContext)) {
                 return next(request);
             }
-            const { span, tracingContext } = (_b = tryCreateSpan(tracingClient, request, userAgent)) !== null && _b !== void 0 ? _b : {};
+            const userAgent = await userAgentPromise;
+            const spanAttributes = {
+                "http.url": sanitizer.sanitizeUrl(request.url),
+                "http.method": request.method,
+                "http.user_agent": userAgent,
+                requestId: request.requestId,
+            };
+            if (userAgent) {
+                spanAttributes["http.user_agent"] = userAgent;
+            }
+            const { span, tracingContext } = (_b = tryCreateSpan(tracingClient, request, spanAttributes)) !== null && _b !== void 0 ? _b : {};
             if (!span || !tracingContext) {
                 return next(request);
             }
@@ -114206,7 +112789,6 @@ function tracingPolicy(options = {}) {
         },
     };
 }
-exports.tracingPolicy = tracingPolicy;
 function tryCreateTracingClient() {
     try {
         return (0, core_tracing_1.createTracingClient)({
@@ -114220,24 +112802,17 @@ function tryCreateTracingClient() {
         return undefined;
     }
 }
-function tryCreateSpan(tracingClient, request, userAgent) {
+function tryCreateSpan(tracingClient, request, spanAttributes) {
     try {
         // As per spec, we do not need to differentiate between HTTP and HTTPS in span name.
         const { span, updatedOptions } = tracingClient.startSpan(`HTTP ${request.method}`, { tracingOptions: request.tracingOptions }, {
             spanKind: "client",
-            spanAttributes: {
-                "http.method": request.method,
-                "http.url": request.url,
-                requestId: request.requestId,
-            },
+            spanAttributes,
         });
         // If the span is not recording, don't do any more work.
         if (!span.isRecording()) {
             span.end();
             return undefined;
-        }
-        if (userAgent) {
-            span.setAttribute("http.user_agent", userAgent);
         }
         // set headers
         const headers = tracingClient.createRequestHeaders(updatedOptions.tracingOptions.tracingContext);
@@ -114294,7 +112869,8 @@ function tryProcessResponse(span, response) {
 // Copyright (c) Microsoft Corporation.
 // Licensed under the MIT license.
 Object.defineProperty(exports, "__esModule", ({ value: true }));
-exports.userAgentPolicy = exports.userAgentPolicyName = void 0;
+exports.userAgentPolicyName = void 0;
+exports.userAgentPolicy = userAgentPolicy;
 const userAgent_js_1 = __nccwpck_require__(96158);
 const UserAgentHeaderName = (0, userAgent_js_1.getUserAgentHeaderName)();
 /**
@@ -114312,13 +112888,12 @@ function userAgentPolicy(options = {}) {
         name: exports.userAgentPolicyName,
         async sendRequest(request, next) {
             if (!request.headers.has(UserAgentHeaderName)) {
-                request.headers.set(UserAgentHeaderName, userAgentValue);
+                request.headers.set(UserAgentHeaderName, await userAgentValue);
             }
             return next(request);
         },
     };
 }
-exports.userAgentPolicy = userAgentPolicy;
 //# sourceMappingURL=userAgentPolicy.js.map
 
 /***/ }),
@@ -114331,7 +112906,8 @@ exports.userAgentPolicy = userAgentPolicy;
 // Copyright (c) Microsoft Corporation.
 // Licensed under the MIT license.
 Object.defineProperty(exports, "__esModule", ({ value: true }));
-exports.isRestError = exports.RestError = void 0;
+exports.RestError = void 0;
+exports.isRestError = isRestError;
 const core_util_1 = __nccwpck_require__(80637);
 const inspect_js_1 = __nccwpck_require__(33106);
 const sanitizer_js_1 = __nccwpck_require__(34472);
@@ -114378,7 +112954,6 @@ function isRestError(e) {
     }
     return (0, core_util_1.isError)(e) && e.name === "RestError";
 }
-exports.isRestError = isRestError;
 //# sourceMappingURL=restError.js.map
 
 /***/ }),
@@ -114391,7 +112966,9 @@ exports.isRestError = isRestError;
 // Copyright (c) Microsoft Corporation.
 // Licensed under the MIT license.
 Object.defineProperty(exports, "__esModule", ({ value: true }));
-exports.isSystemError = exports.isExponentialRetryResponse = exports.exponentialRetryStrategy = void 0;
+exports.exponentialRetryStrategy = exponentialRetryStrategy;
+exports.isExponentialRetryResponse = isExponentialRetryResponse;
+exports.isSystemError = isSystemError;
 const core_util_1 = __nccwpck_require__(80637);
 const throttlingRetryStrategy_js_1 = __nccwpck_require__(66645);
 // intervals are in milliseconds
@@ -114433,7 +113010,6 @@ function exponentialRetryStrategy(options = {}) {
         },
     };
 }
-exports.exponentialRetryStrategy = exponentialRetryStrategy;
 /**
  * A response is a retry response if it has status codes:
  * - 408, or
@@ -114446,7 +113022,6 @@ function isExponentialRetryResponse(response) {
         response.status !== 501 &&
         response.status !== 505);
 }
-exports.isExponentialRetryResponse = isExponentialRetryResponse;
 /**
  * Determines whether an error from a pipeline response was triggered in the network layer.
  */
@@ -114461,7 +113036,6 @@ function isSystemError(err) {
         err.code === "ENOENT" ||
         err.code === "ENOTFOUND");
 }
-exports.isSystemError = isSystemError;
 //# sourceMappingURL=exponentialRetryStrategy.js.map
 
 /***/ }),
@@ -114474,7 +113048,8 @@ exports.isSystemError = isSystemError;
 // Copyright (c) Microsoft Corporation.
 // Licensed under the MIT license.
 Object.defineProperty(exports, "__esModule", ({ value: true }));
-exports.throttlingRetryStrategy = exports.isThrottlingRetryResponse = void 0;
+exports.isThrottlingRetryResponse = isThrottlingRetryResponse;
+exports.throttlingRetryStrategy = throttlingRetryStrategy;
 const helpers_js_1 = __nccwpck_require__(21333);
 /**
  * The header that comes back from Azure services representing
@@ -114532,7 +113107,6 @@ function getRetryAfterInMs(response) {
 function isThrottlingRetryResponse(response) {
     return Number.isFinite(getRetryAfterInMs(response));
 }
-exports.isThrottlingRetryResponse = isThrottlingRetryResponse;
 function throttlingRetryStrategy() {
     return {
         name: "throttlingRetryStrategy",
@@ -114547,7 +113121,6 @@ function throttlingRetryStrategy() {
         },
     };
 }
-exports.throttlingRetryStrategy = throttlingRetryStrategy;
 //# sourceMappingURL=throttlingRetryStrategy.js.map
 
 /***/ }),
@@ -114560,7 +113133,7 @@ exports.throttlingRetryStrategy = throttlingRetryStrategy;
 // Copyright (c) Microsoft Corporation.
 // Licensed under the MIT license.
 Object.defineProperty(exports, "__esModule", ({ value: true }));
-exports.concat = void 0;
+exports.concat = concat;
 const tslib_1 = __nccwpck_require__(89679);
 const node_stream_1 = __nccwpck_require__(84492);
 const typeGuards_js_1 = __nccwpck_require__(58520);
@@ -114646,7 +113219,6 @@ async function concat(sources) {
         })());
     };
 }
-exports.concat = concat;
 //# sourceMappingURL=concat.js.map
 
 /***/ }),
@@ -114659,7 +113231,9 @@ exports.concat = concat;
 // Copyright (c) Microsoft Corporation.
 // Licensed under the MIT license.
 Object.defineProperty(exports, "__esModule", ({ value: true }));
-exports.createFile = exports.createFileFromStream = exports.getRawContent = void 0;
+exports.getRawContent = getRawContent;
+exports.createFileFromStream = createFileFromStream;
+exports.createFile = createFile;
 const core_util_1 = __nccwpck_require__(80637);
 const typeGuards_js_1 = __nccwpck_require__(58520);
 const unimplementedMethods = {
@@ -114706,7 +113280,6 @@ function getRawContent(blob) {
         return blob.stream();
     }
 }
-exports.getRawContent = getRawContent;
 /**
  * Create an object that implements the File interface. This object is intended to be
  * passed into RequestBodyType.formData, and is not guaranteed to work as expected in
@@ -114734,7 +113307,6 @@ function createFileFromStream(stream, name, options = {}) {
             return s;
         }, [rawContent]: stream });
 }
-exports.createFileFromStream = createFileFromStream;
 /**
  * Create an object that implements the File interface. This object is intended to be
  * passed into RequestBodyType.formData, and is not guaranteed to work as expected in
@@ -114755,7 +113327,6 @@ function createFile(content, name, options = {}) {
         return new File([content], name, options);
     }
 }
-exports.createFile = createFile;
 //# sourceMappingURL=file.js.map
 
 /***/ }),
@@ -114768,7 +113339,8 @@ exports.createFile = createFile;
 // Copyright (c) Microsoft Corporation.
 // Licensed under the MIT license.
 Object.defineProperty(exports, "__esModule", ({ value: true }));
-exports.parseHeaderValueAsNumber = exports.delay = void 0;
+exports.delay = delay;
+exports.parseHeaderValueAsNumber = parseHeaderValueAsNumber;
 const abort_controller_1 = __nccwpck_require__(11514);
 const StandardAbortMessage = "The operation was aborted.";
 /**
@@ -114811,7 +113383,6 @@ function delay(delayInMs, value, options) {
         }
     });
 }
-exports.delay = delay;
 /**
  * @internal
  * @returns the parsed value or undefined if the parsed value is invalid.
@@ -114825,7 +113396,6 @@ function parseHeaderValueAsNumber(response, headerName) {
         return;
     return valueAsNum;
 }
-exports.parseHeaderValueAsNumber = parseHeaderValueAsNumber;
 //# sourceMappingURL=helpers.js.map
 
 /***/ }),
@@ -114947,6 +113517,21 @@ class Sanitizer {
             return value;
         }, 2);
     }
+    sanitizeUrl(value) {
+        if (typeof value !== "string" || value === null || value === "") {
+            return value;
+        }
+        const url = new URL(value);
+        if (!url.search) {
+            return value;
+        }
+        for (const [key] of url.searchParams) {
+            if (!this.allowedQueryParameters.has(key.toLowerCase())) {
+                url.searchParams.set(key, RedactedString);
+            }
+        }
+        return url.toString();
+    }
     sanitizeHeaders(obj) {
         const sanitized = {};
         for (const key of Object.keys(obj)) {
@@ -114974,21 +113559,6 @@ class Sanitizer {
         }
         return sanitized;
     }
-    sanitizeUrl(value) {
-        if (typeof value !== "string" || value === null) {
-            return value;
-        }
-        const url = new URL(value);
-        if (!url.search) {
-            return value;
-        }
-        for (const [key] of url.searchParams) {
-            if (!this.allowedQueryParameters.has(key.toLowerCase())) {
-                url.searchParams.set(key, RedactedString);
-            }
-        }
-        return url.toString();
-    }
 }
 exports.Sanitizer = Sanitizer;
 //# sourceMappingURL=sanitizer.js.map
@@ -115003,7 +113573,8 @@ exports.Sanitizer = Sanitizer;
 // Copyright (c) Microsoft Corporation.
 // Licensed under the MIT license.
 Object.defineProperty(exports, "__esModule", ({ value: true }));
-exports.createTokenCycler = exports.DEFAULT_CYCLER_OPTIONS = void 0;
+exports.DEFAULT_CYCLER_OPTIONS = void 0;
+exports.createTokenCycler = createTokenCycler;
 const helpers_js_1 = __nccwpck_require__(21333);
 // Default options for the cycler if none are provided
 exports.DEFAULT_CYCLER_OPTIONS = {
@@ -115138,19 +113709,26 @@ function createTokenCycler(credential, tokenCyclerOptions) {
         // - Return the token, since it's fine if we didn't return in
         //   step 1.
         //
+        const hasClaimChallenge = Boolean(tokenOptions.claims);
+        const tenantIdChanged = tenantId !== tokenOptions.tenantId;
+        if (hasClaimChallenge) {
+            // If we've received a claim, we know the existing token isn't valid
+            // We want to clear it so that that refresh worker won't use the old expiration time as a timeout
+            token = null;
+        }
         // If the tenantId passed in token options is different to the one we have
         // Or if we are in claim challenge and the token was rejected and a new access token need to be issued, we need to
         // refresh the token with the new tenantId or token.
-        const mustRefresh = tenantId !== tokenOptions.tenantId || Boolean(tokenOptions.claims) || cycler.mustRefresh;
-        if (mustRefresh)
+        const mustRefresh = tenantIdChanged || hasClaimChallenge || cycler.mustRefresh;
+        if (mustRefresh) {
             return refresh(scopes, tokenOptions);
+        }
         if (cycler.shouldRefresh) {
             refresh(scopes, tokenOptions);
         }
         return token;
     };
 }
-exports.createTokenCycler = createTokenCycler;
 //# sourceMappingURL=tokenCycler.js.map
 
 /***/ }),
@@ -115163,25 +113741,24 @@ exports.createTokenCycler = createTokenCycler;
 // Copyright (c) Microsoft Corporation.
 // Licensed under the MIT license.
 Object.defineProperty(exports, "__esModule", ({ value: true }));
-exports.isBlob = exports.isReadableStream = exports.isWebReadableStream = exports.isNodeReadableStream = void 0;
+exports.isNodeReadableStream = isNodeReadableStream;
+exports.isWebReadableStream = isWebReadableStream;
+exports.isReadableStream = isReadableStream;
+exports.isBlob = isBlob;
 function isNodeReadableStream(x) {
     return Boolean(x && typeof x["pipe"] === "function");
 }
-exports.isNodeReadableStream = isNodeReadableStream;
 function isWebReadableStream(x) {
     return Boolean(x &&
         typeof x.getReader === "function" &&
         typeof x.tee === "function");
 }
-exports.isWebReadableStream = isWebReadableStream;
 function isReadableStream(x) {
     return isNodeReadableStream(x) || isWebReadableStream(x);
 }
-exports.isReadableStream = isReadableStream;
 function isBlob(x) {
     return typeof x.stream === "function";
 }
-exports.isBlob = isBlob;
 //# sourceMappingURL=typeGuards.js.map
 
 /***/ }),
@@ -115194,7 +113771,8 @@ exports.isBlob = isBlob;
 // Copyright (c) Microsoft Corporation.
 // Licensed under the MIT license.
 Object.defineProperty(exports, "__esModule", ({ value: true }));
-exports.getUserAgentValue = exports.getUserAgentHeaderName = void 0;
+exports.getUserAgentHeaderName = getUserAgentHeaderName;
+exports.getUserAgentValue = getUserAgentValue;
 const userAgentPlatform_js_1 = __nccwpck_require__(15316);
 const constants_js_1 = __nccwpck_require__(32565);
 function getUserAgentString(telemetryInfo) {
@@ -115211,19 +113789,17 @@ function getUserAgentString(telemetryInfo) {
 function getUserAgentHeaderName() {
     return (0, userAgentPlatform_js_1.getHeaderName)();
 }
-exports.getUserAgentHeaderName = getUserAgentHeaderName;
 /**
  * @internal
  */
-function getUserAgentValue(prefix) {
+async function getUserAgentValue(prefix) {
     const runtimeInfo = new Map();
     runtimeInfo.set("core-rest-pipeline", constants_js_1.SDK_VERSION);
-    (0, userAgentPlatform_js_1.setPlatformSpecificData)(runtimeInfo);
+    await (0, userAgentPlatform_js_1.setPlatformSpecificData)(runtimeInfo);
     const defaultAgent = getUserAgentString(runtimeInfo);
     const userAgentValue = prefix ? `${prefix} ${defaultAgent}` : defaultAgent;
     return userAgentValue;
 }
-exports.getUserAgentValue = getUserAgentValue;
 //# sourceMappingURL=userAgent.js.map
 
 /***/ }),
@@ -115236,7 +113812,8 @@ exports.getUserAgentValue = getUserAgentValue;
 // Copyright (c) Microsoft Corporation.
 // Licensed under the MIT license.
 Object.defineProperty(exports, "__esModule", ({ value: true }));
-exports.setPlatformSpecificData = exports.getHeaderName = void 0;
+exports.getHeaderName = getHeaderName;
+exports.setPlatformSpecificData = setPlatformSpecificData;
 const tslib_1 = __nccwpck_require__(89679);
 const os = tslib_1.__importStar(__nccwpck_require__(70612));
 const process = tslib_1.__importStar(__nccwpck_require__(97742));
@@ -115246,24 +113823,24 @@ const process = tslib_1.__importStar(__nccwpck_require__(97742));
 function getHeaderName() {
     return "User-Agent";
 }
-exports.getHeaderName = getHeaderName;
 /**
  * @internal
  */
-function setPlatformSpecificData(map) {
-    const versions = process.versions;
-    if (versions.bun) {
-        map.set("Bun", versions.bun);
-    }
-    else if (versions.deno) {
-        map.set("Deno", versions.deno);
-    }
-    else if (versions.node) {
-        map.set("Node", versions.node);
+async function setPlatformSpecificData(map) {
+    if (process && process.versions) {
+        const versions = process.versions;
+        if (versions.bun) {
+            map.set("Bun", versions.bun);
+        }
+        else if (versions.deno) {
+            map.set("Deno", versions.deno);
+        }
+        else if (versions.node) {
+            map.set("Node", versions.node);
+        }
     }
     map.set("OS", `(${os.arch()}-${os.type()}-${os.release()})`);
 }
-exports.setPlatformSpecificData = setPlatformSpecificData;
 //# sourceMappingURL=userAgentPlatform.js.map
 
 /***/ }),
@@ -115585,7 +114162,7 @@ exports.TracingContextImpl = TracingContextImpl;
 // Copyright (c) Microsoft Corporation.
 // Licensed under the MIT license.
 Object.defineProperty(exports, "__esModule", ({ value: true }));
-exports.cancelablePromiseRace = void 0;
+exports.cancelablePromiseRace = cancelablePromiseRace;
 /**
  * promise.race() wrapper that aborts rest of promises as soon as the first promise settles.
  */
@@ -115604,7 +114181,6 @@ async function cancelablePromiseRace(abortablePromiseBuilders, options) {
         (_b = options === null || options === void 0 ? void 0 : options.abortSignal) === null || _b === void 0 ? void 0 : _b.removeEventListener("abort", abortHandler);
     }
 }
-exports.cancelablePromiseRace = cancelablePromiseRace;
 //# sourceMappingURL=aborterUtils.js.map
 
 /***/ }),
@@ -115617,7 +114193,8 @@ exports.cancelablePromiseRace = cancelablePromiseRace;
 // Copyright (c) Microsoft Corporation.
 // Licensed under the MIT license.
 Object.defineProperty(exports, "__esModule", ({ value: true }));
-exports.stringToUint8Array = exports.uint8ArrayToString = void 0;
+exports.uint8ArrayToString = uint8ArrayToString;
+exports.stringToUint8Array = stringToUint8Array;
 /**
  * The helper that transforms bytes with specific character encoding into string
  * @param bytes - the uint8array bytes
@@ -115627,7 +114204,6 @@ exports.stringToUint8Array = exports.uint8ArrayToString = void 0;
 function uint8ArrayToString(bytes, format) {
     return Buffer.from(bytes).toString(format);
 }
-exports.uint8ArrayToString = uint8ArrayToString;
 /**
  * The helper that transforms string to specific character encoded bytes array.
  * @param value - the string to be converted
@@ -115637,7 +114213,6 @@ exports.uint8ArrayToString = uint8ArrayToString;
 function stringToUint8Array(value, format) {
     return Buffer.from(value, format);
 }
-exports.stringToUint8Array = stringToUint8Array;
 //# sourceMappingURL=bytesEncoding.js.map
 
 /***/ }),
@@ -115707,7 +114282,7 @@ exports.isReactNative = typeof navigator !== "undefined" && (navigator === null 
 // Copyright (c) Microsoft Corporation.
 // Licensed under the MIT license.
 Object.defineProperty(exports, "__esModule", ({ value: true }));
-exports.createAbortablePromise = void 0;
+exports.createAbortablePromise = createAbortablePromise;
 const abort_controller_1 = __nccwpck_require__(54812);
 /**
  * Creates an abortable promise.
@@ -115747,7 +114322,6 @@ function createAbortablePromise(buildPromise, options) {
         abortSignal === null || abortSignal === void 0 ? void 0 : abortSignal.addEventListener("abort", onAbort);
     });
 }
-exports.createAbortablePromise = createAbortablePromise;
 //# sourceMappingURL=createAbortablePromise.js.map
 
 /***/ }),
@@ -115760,7 +114334,7 @@ exports.createAbortablePromise = createAbortablePromise;
 // Copyright (c) Microsoft Corporation.
 // Licensed under the MIT license.
 Object.defineProperty(exports, "__esModule", ({ value: true }));
-exports.delay = void 0;
+exports.delay = delay;
 const createAbortablePromise_js_1 = __nccwpck_require__(12376);
 const StandardAbortMessage = "The delay was aborted.";
 /**
@@ -115780,7 +114354,6 @@ function delay(timeInMs, options) {
         abortErrorMsg: abortErrorMsg !== null && abortErrorMsg !== void 0 ? abortErrorMsg : StandardAbortMessage,
     });
 }
-exports.delay = delay;
 //# sourceMappingURL=delay.js.map
 
 /***/ }),
@@ -115793,7 +114366,8 @@ exports.delay = delay;
 // Copyright (c) Microsoft Corporation.
 // Licensed under the MIT license.
 Object.defineProperty(exports, "__esModule", ({ value: true }));
-exports.getErrorMessage = exports.isError = void 0;
+exports.isError = isError;
+exports.getErrorMessage = getErrorMessage;
 const object_js_1 = __nccwpck_require__(56538);
 /**
  * Typeguard for an error object shape (has name and message)
@@ -115807,7 +114381,6 @@ function isError(e) {
     }
     return false;
 }
-exports.isError = isError;
 /**
  * Given what is thought to be an error object, return the message if possible.
  * If the message is missing, returns a stringified version of the input.
@@ -115834,7 +114407,6 @@ function getErrorMessage(e) {
         return `Unknown error ${stringified}`;
     }
 }
-exports.getErrorMessage = getErrorMessage;
 //# sourceMappingURL=error.js.map
 
 /***/ }),
@@ -115894,7 +114466,7 @@ Object.defineProperty(exports, "stringToUint8Array", ({ enumerable: true, get: f
 // Copyright (c) Microsoft Corporation.
 // Licensed under the MIT license.
 Object.defineProperty(exports, "__esModule", ({ value: true }));
-exports.isObject = void 0;
+exports.isObject = isObject;
 /**
  * Helper to determine when an input is a generic JS object.
  * @returns true when input is an object type that is not null, Array, RegExp, or Date.
@@ -115906,7 +114478,6 @@ function isObject(input) {
         !(input instanceof RegExp) &&
         !(input instanceof Date));
 }
-exports.isObject = isObject;
 //# sourceMappingURL=object.js.map
 
 /***/ }),
@@ -115919,7 +114490,7 @@ exports.isObject = isObject;
 // Copyright (c) Microsoft Corporation.
 // Licensed under the MIT license.
 Object.defineProperty(exports, "__esModule", ({ value: true }));
-exports.getRandomIntegerInclusive = void 0;
+exports.getRandomIntegerInclusive = getRandomIntegerInclusive;
 /**
  * Returns a random integer value between a lower and upper bound,
  * inclusive of both bounds.
@@ -115938,7 +114509,6 @@ function getRandomIntegerInclusive(min, max) {
     const offset = Math.floor(Math.random() * (max - min + 1));
     return offset + min;
 }
-exports.getRandomIntegerInclusive = getRandomIntegerInclusive;
 //# sourceMappingURL=random.js.map
 
 /***/ }),
@@ -115951,7 +114521,8 @@ exports.getRandomIntegerInclusive = getRandomIntegerInclusive;
 // Copyright (c) Microsoft Corporation.
 // Licensed under the MIT license.
 Object.defineProperty(exports, "__esModule", ({ value: true }));
-exports.computeSha256Hash = exports.computeSha256Hmac = void 0;
+exports.computeSha256Hmac = computeSha256Hmac;
+exports.computeSha256Hash = computeSha256Hash;
 const crypto_1 = __nccwpck_require__(6113);
 /**
  * Generates a SHA-256 HMAC signature.
@@ -115963,7 +114534,6 @@ async function computeSha256Hmac(key, stringToSign, encoding) {
     const decodedKey = Buffer.from(key, "base64");
     return (0, crypto_1.createHmac)("sha256", decodedKey).update(stringToSign).digest(encoding);
 }
-exports.computeSha256Hmac = computeSha256Hmac;
 /**
  * Generates a SHA-256 hash.
  * @param content - The data to be included in the hash.
@@ -115972,7 +114542,6 @@ exports.computeSha256Hmac = computeSha256Hmac;
 async function computeSha256Hash(content, encoding) {
     return (0, crypto_1.createHash)("sha256").update(content).digest(encoding);
 }
-exports.computeSha256Hash = computeSha256Hash;
 //# sourceMappingURL=sha256.js.map
 
 /***/ }),
@@ -115985,7 +114554,9 @@ exports.computeSha256Hash = computeSha256Hash;
 // Copyright (c) Microsoft Corporation.
 // Licensed under the MIT license.
 Object.defineProperty(exports, "__esModule", ({ value: true }));
-exports.objectHasProperty = exports.isObjectWithProperties = exports.isDefined = void 0;
+exports.isDefined = isDefined;
+exports.isObjectWithProperties = isObjectWithProperties;
+exports.objectHasProperty = objectHasProperty;
 /**
  * Helper TypeGuard that checks if something is defined or not.
  * @param thing - Anything
@@ -115993,7 +114564,6 @@ exports.objectHasProperty = exports.isObjectWithProperties = exports.isDefined =
 function isDefined(thing) {
     return typeof thing !== "undefined" && thing !== null;
 }
-exports.isDefined = isDefined;
 /**
  * Helper TypeGuard that checks if the input is an object with the specified properties.
  * @param thing - Anything.
@@ -116010,7 +114580,6 @@ function isObjectWithProperties(thing, properties) {
     }
     return true;
 }
-exports.isObjectWithProperties = isObjectWithProperties;
 /**
  * Helper TypeGuard that checks if the input is an object with the specified property.
  * @param thing - Any object.
@@ -116019,7 +114588,6 @@ exports.isObjectWithProperties = isObjectWithProperties;
 function objectHasProperty(thing, property) {
     return (isDefined(thing) && typeof thing === "object" && property in thing);
 }
-exports.objectHasProperty = objectHasProperty;
 //# sourceMappingURL=typeGuards.js.map
 
 /***/ }),
@@ -116033,7 +114601,7 @@ exports.objectHasProperty = objectHasProperty;
 // Licensed under the MIT license.
 var _a;
 Object.defineProperty(exports, "__esModule", ({ value: true }));
-exports.randomUUID = void 0;
+exports.randomUUID = randomUUID;
 const crypto_1 = __nccwpck_require__(6113);
 // NOTE: This is a workaround until we can use `globalThis.crypto.randomUUID` in Node.js 19+.
 const uuidFunction = typeof ((_a = globalThis === null || globalThis === void 0 ? void 0 : globalThis.crypto) === null || _a === void 0 ? void 0 : _a.randomUUID) === "function"
@@ -116047,7 +114615,6 @@ const uuidFunction = typeof ((_a = globalThis === null || globalThis === void 0 
 function randomUUID() {
     return uuidFunction();
 }
-exports.randomUUID = randomUUID;
 //# sourceMappingURL=uuidUtils.js.map
 
 /***/ }),
@@ -116215,7 +114782,10 @@ exports["default"] = debugObj;
 // Copyright (c) Microsoft Corporation.
 // Licensed under the MIT license.
 Object.defineProperty(exports, "__esModule", ({ value: true }));
-exports.createClientLogger = exports.getLogLevel = exports.setLogLevel = exports.AzureLogger = void 0;
+exports.AzureLogger = void 0;
+exports.setLogLevel = setLogLevel;
+exports.getLogLevel = getLogLevel;
+exports.createClientLogger = createClientLogger;
 const tslib_1 = __nccwpck_require__(89679);
 const debug_js_1 = tslib_1.__importDefault(__nccwpck_require__(80162));
 const registeredLoggers = new Set();
@@ -116262,14 +114832,12 @@ function setLogLevel(level) {
     }
     debug_js_1.default.enable(enabledNamespaces.join(","));
 }
-exports.setLogLevel = setLogLevel;
 /**
  * Retrieves the currently specified log level.
  */
 function getLogLevel() {
     return azureLogLevel;
 }
-exports.getLogLevel = getLogLevel;
 const levelMap = {
     verbose: 400,
     info: 300,
@@ -116291,7 +114859,6 @@ function createClientLogger(namespace) {
         verbose: createLogger(clientRootLogger, "verbose"),
     };
 }
-exports.createClientLogger = createClientLogger;
 function patchLogMethod(parent, child) {
     child.log = (...args) => {
         parent.log(...args);
@@ -116327,7 +114894,7 @@ function isAzureLogLevel(logLevel) {
 // Copyright (c) Microsoft Corporation.
 // Licensed under the MIT license.
 Object.defineProperty(exports, "__esModule", ({ value: true }));
-exports.log = void 0;
+exports.log = log;
 const tslib_1 = __nccwpck_require__(89679);
 const node_os_1 = __nccwpck_require__(70612);
 const node_util_1 = tslib_1.__importDefault(__nccwpck_require__(47261));
@@ -116335,7 +114902,6 @@ const process = tslib_1.__importStar(__nccwpck_require__(97742));
 function log(message, ...args) {
     process.stderr.write(`${node_util_1.default.format(message, ...args)}${node_os_1.EOL}`);
 }
-exports.log = log;
 //# sourceMappingURL=log.js.map
 
 /***/ }),
@@ -117965,6 +116531,807 @@ module.exports = parseParams
 
 /***/ }),
 
+/***/ 49688:
+/***/ ((module, __unused_webpack_exports, __nccwpck_require__) => {
+
+"use strict";
+
+
+const { normalizeIPv6, normalizeIPv4, removeDotSegments, recomposeAuthority, normalizeComponentEncoding } = __nccwpck_require__(96743)
+const SCHEMES = __nccwpck_require__(4923)
+
+function normalize (uri, options) {
+  if (typeof uri === 'string') {
+    uri = serialize(parse(uri, options), options)
+  } else if (typeof uri === 'object') {
+    uri = parse(serialize(uri, options), options)
+  }
+  return uri
+}
+
+function resolve (baseURI, relativeURI, options) {
+  const schemelessOptions = Object.assign({ scheme: 'null' }, options)
+  const resolved = resolveComponents(parse(baseURI, schemelessOptions), parse(relativeURI, schemelessOptions), schemelessOptions, true)
+  return serialize(resolved, { ...schemelessOptions, skipEscape: true })
+}
+
+function resolveComponents (base, relative, options, skipNormalization) {
+  const target = {}
+  if (!skipNormalization) {
+    base = parse(serialize(base, options), options) // normalize base components
+    relative = parse(serialize(relative, options), options) // normalize relative components
+  }
+  options = options || {}
+
+  if (!options.tolerant && relative.scheme) {
+    target.scheme = relative.scheme
+    // target.authority = relative.authority;
+    target.userinfo = relative.userinfo
+    target.host = relative.host
+    target.port = relative.port
+    target.path = removeDotSegments(relative.path || '')
+    target.query = relative.query
+  } else {
+    if (relative.userinfo !== undefined || relative.host !== undefined || relative.port !== undefined) {
+      // target.authority = relative.authority;
+      target.userinfo = relative.userinfo
+      target.host = relative.host
+      target.port = relative.port
+      target.path = removeDotSegments(relative.path || '')
+      target.query = relative.query
+    } else {
+      if (!relative.path) {
+        target.path = base.path
+        if (relative.query !== undefined) {
+          target.query = relative.query
+        } else {
+          target.query = base.query
+        }
+      } else {
+        if (relative.path.charAt(0) === '/') {
+          target.path = removeDotSegments(relative.path)
+        } else {
+          if ((base.userinfo !== undefined || base.host !== undefined || base.port !== undefined) && !base.path) {
+            target.path = '/' + relative.path
+          } else if (!base.path) {
+            target.path = relative.path
+          } else {
+            target.path = base.path.slice(0, base.path.lastIndexOf('/') + 1) + relative.path
+          }
+          target.path = removeDotSegments(target.path)
+        }
+        target.query = relative.query
+      }
+      // target.authority = base.authority;
+      target.userinfo = base.userinfo
+      target.host = base.host
+      target.port = base.port
+    }
+    target.scheme = base.scheme
+  }
+
+  target.fragment = relative.fragment
+
+  return target
+}
+
+function equal (uriA, uriB, options) {
+  if (typeof uriA === 'string') {
+    uriA = unescape(uriA)
+    uriA = serialize(normalizeComponentEncoding(parse(uriA, options), true), { ...options, skipEscape: true })
+  } else if (typeof uriA === 'object') {
+    uriA = serialize(normalizeComponentEncoding(uriA, true), { ...options, skipEscape: true })
+  }
+
+  if (typeof uriB === 'string') {
+    uriB = unescape(uriB)
+    uriB = serialize(normalizeComponentEncoding(parse(uriB, options), true), { ...options, skipEscape: true })
+  } else if (typeof uriB === 'object') {
+    uriB = serialize(normalizeComponentEncoding(uriB, true), { ...options, skipEscape: true })
+  }
+
+  return uriA.toLowerCase() === uriB.toLowerCase()
+}
+
+function serialize (cmpts, opts) {
+  const components = {
+    host: cmpts.host,
+    scheme: cmpts.scheme,
+    userinfo: cmpts.userinfo,
+    port: cmpts.port,
+    path: cmpts.path,
+    query: cmpts.query,
+    nid: cmpts.nid,
+    nss: cmpts.nss,
+    uuid: cmpts.uuid,
+    fragment: cmpts.fragment,
+    reference: cmpts.reference,
+    resourceName: cmpts.resourceName,
+    secure: cmpts.secure,
+    error: ''
+  }
+  const options = Object.assign({}, opts)
+  const uriTokens = []
+
+  // find scheme handler
+  const schemeHandler = SCHEMES[(options.scheme || components.scheme || '').toLowerCase()]
+
+  // perform scheme specific serialization
+  if (schemeHandler && schemeHandler.serialize) schemeHandler.serialize(components, options)
+
+  if (components.path !== undefined) {
+    if (!options.skipEscape) {
+      components.path = escape(components.path)
+
+      if (components.scheme !== undefined) {
+        components.path = components.path.split('%3A').join(':')
+      }
+    } else {
+      components.path = unescape(components.path)
+    }
+  }
+
+  if (options.reference !== 'suffix' && components.scheme) {
+    uriTokens.push(components.scheme)
+    uriTokens.push(':')
+  }
+
+  const authority = recomposeAuthority(components, options)
+  if (authority !== undefined) {
+    if (options.reference !== 'suffix') {
+      uriTokens.push('//')
+    }
+
+    uriTokens.push(authority)
+
+    if (components.path && components.path.charAt(0) !== '/') {
+      uriTokens.push('/')
+    }
+  }
+  if (components.path !== undefined) {
+    let s = components.path
+
+    if (!options.absolutePath && (!schemeHandler || !schemeHandler.absolutePath)) {
+      s = removeDotSegments(s)
+    }
+
+    if (authority === undefined) {
+      s = s.replace(/^\/\//u, '/%2F') // don't allow the path to start with "//"
+    }
+
+    uriTokens.push(s)
+  }
+
+  if (components.query !== undefined) {
+    uriTokens.push('?')
+    uriTokens.push(components.query)
+  }
+
+  if (components.fragment !== undefined) {
+    uriTokens.push('#')
+    uriTokens.push(components.fragment)
+  }
+  return uriTokens.join('')
+}
+
+const hexLookUp = Array.from({ length: 127 }, (v, k) => /[^!"$&'()*+,\-.;=_`a-z{}~]/u.test(String.fromCharCode(k)))
+
+function nonSimpleDomain (value) {
+  let code = 0
+  for (let i = 0, len = value.length; i < len; ++i) {
+    code = value.charCodeAt(i)
+    if (code > 126 || hexLookUp[code]) {
+      return true
+    }
+  }
+  return false
+}
+
+const URI_PARSE = /^(?:([^#/:?]+):)?(?:\/\/((?:([^#/?@]*)@)?(\[[^#/?\]]+\]|[^#/:?]*)(?::(\d*))?))?([^#?]*)(?:\?([^#]*))?(?:#((?:.|[\n\r])*))?/u
+
+function parse (uri, opts) {
+  const options = Object.assign({}, opts)
+  const parsed = {
+    scheme: undefined,
+    userinfo: undefined,
+    host: '',
+    port: undefined,
+    path: '',
+    query: undefined,
+    fragment: undefined
+  }
+  const gotEncoding = uri.indexOf('%') !== -1
+  let isIP = false
+  if (options.reference === 'suffix') uri = (options.scheme ? options.scheme + ':' : '') + '//' + uri
+
+  const matches = uri.match(URI_PARSE)
+
+  if (matches) {
+    // store each component
+    parsed.scheme = matches[1]
+    parsed.userinfo = matches[3]
+    parsed.host = matches[4]
+    parsed.port = parseInt(matches[5], 10)
+    parsed.path = matches[6] || ''
+    parsed.query = matches[7]
+    parsed.fragment = matches[8]
+
+    // fix port number
+    if (isNaN(parsed.port)) {
+      parsed.port = matches[5]
+    }
+    if (parsed.host) {
+      const ipv4result = normalizeIPv4(parsed.host)
+      if (ipv4result.isIPV4 === false) {
+        const ipv6result = normalizeIPv6(ipv4result.host, { isIPV4: false })
+        parsed.host = ipv6result.host.toLowerCase()
+        isIP = ipv6result.isIPV6
+      } else {
+        parsed.host = ipv4result.host
+        isIP = true
+      }
+    }
+    if (parsed.scheme === undefined && parsed.userinfo === undefined && parsed.host === undefined && parsed.port === undefined && !parsed.path && parsed.query === undefined) {
+      parsed.reference = 'same-document'
+    } else if (parsed.scheme === undefined) {
+      parsed.reference = 'relative'
+    } else if (parsed.fragment === undefined) {
+      parsed.reference = 'absolute'
+    } else {
+      parsed.reference = 'uri'
+    }
+
+    // check for reference errors
+    if (options.reference && options.reference !== 'suffix' && options.reference !== parsed.reference) {
+      parsed.error = parsed.error || 'URI is not a ' + options.reference + ' reference.'
+    }
+
+    // find scheme handler
+    const schemeHandler = SCHEMES[(options.scheme || parsed.scheme || '').toLowerCase()]
+
+    // check if scheme can't handle IRIs
+    if (!options.unicodeSupport && (!schemeHandler || !schemeHandler.unicodeSupport)) {
+      // if host component is a domain name
+      if (parsed.host && (options.domainHost || (schemeHandler && schemeHandler.domainHost)) && isIP === false && nonSimpleDomain(parsed.host)) {
+        // convert Unicode IDN -> ASCII IDN
+        try {
+          parsed.host = URL.domainToASCII(parsed.host.toLowerCase())
+        } catch (e) {
+          parsed.error = parsed.error || "Host's domain name can not be converted to ASCII: " + e
+        }
+      }
+      // convert IRI -> URI
+    }
+
+    if (!schemeHandler || (schemeHandler && !schemeHandler.skipNormalize)) {
+      if (gotEncoding && parsed.scheme !== undefined) {
+        parsed.scheme = unescape(parsed.scheme)
+      }
+      if (gotEncoding && parsed.userinfo !== undefined) {
+        parsed.userinfo = unescape(parsed.userinfo)
+      }
+      if (gotEncoding && parsed.host !== undefined) {
+        parsed.host = unescape(parsed.host)
+      }
+      if (parsed.path !== undefined && parsed.path.length) {
+        parsed.path = escape(unescape(parsed.path))
+      }
+      if (parsed.fragment !== undefined && parsed.fragment.length) {
+        parsed.fragment = encodeURI(decodeURIComponent(parsed.fragment))
+      }
+    }
+
+    // perform scheme specific parsing
+    if (schemeHandler && schemeHandler.parse) {
+      schemeHandler.parse(parsed, options)
+    }
+  } else {
+    parsed.error = parsed.error || 'URI can not be parsed.'
+  }
+  return parsed
+}
+
+const fastUri = {
+  SCHEMES,
+  normalize,
+  resolve,
+  resolveComponents,
+  equal,
+  serialize,
+  parse
+}
+
+module.exports = fastUri
+module.exports["default"] = fastUri
+module.exports.fastUri = fastUri
+
+
+/***/ }),
+
+/***/ 4923:
+/***/ ((module) => {
+
+"use strict";
+
+
+const UUID_REG = /^[\da-f]{8}\b-[\da-f]{4}\b-[\da-f]{4}\b-[\da-f]{4}\b-[\da-f]{12}$/iu
+const URN_REG = /([\da-z][\d\-a-z]{0,31}):((?:[\w!$'()*+,\-.:;=@]|%[\da-f]{2})+)/iu
+
+function isSecure (wsComponents) {
+  return typeof wsComponents.secure === 'boolean' ? wsComponents.secure : String(wsComponents.scheme).toLowerCase() === 'wss'
+}
+
+function httpParse (components) {
+  if (!components.host) {
+    components.error = components.error || 'HTTP URIs must have a host.'
+  }
+
+  return components
+}
+
+function httpSerialize (components) {
+  const secure = String(components.scheme).toLowerCase() === 'https'
+
+  // normalize the default port
+  if (components.port === (secure ? 443 : 80) || components.port === '') {
+    components.port = undefined
+  }
+
+  // normalize the empty path
+  if (!components.path) {
+    components.path = '/'
+  }
+
+  // NOTE: We do not parse query strings for HTTP URIs
+  // as WWW Form Url Encoded query strings are part of the HTML4+ spec,
+  // and not the HTTP spec.
+
+  return components
+}
+
+function wsParse (wsComponents) {
+// indicate if the secure flag is set
+  wsComponents.secure = isSecure(wsComponents)
+
+  // construct resouce name
+  wsComponents.resourceName = (wsComponents.path || '/') + (wsComponents.query ? '?' + wsComponents.query : '')
+  wsComponents.path = undefined
+  wsComponents.query = undefined
+
+  return wsComponents
+}
+
+function wsSerialize (wsComponents) {
+// normalize the default port
+  if (wsComponents.port === (isSecure(wsComponents) ? 443 : 80) || wsComponents.port === '') {
+    wsComponents.port = undefined
+  }
+
+  // ensure scheme matches secure flag
+  if (typeof wsComponents.secure === 'boolean') {
+    wsComponents.scheme = (wsComponents.secure ? 'wss' : 'ws')
+    wsComponents.secure = undefined
+  }
+
+  // reconstruct path from resource name
+  if (wsComponents.resourceName) {
+    const [path, query] = wsComponents.resourceName.split('?')
+    wsComponents.path = (path && path !== '/' ? path : undefined)
+    wsComponents.query = query
+    wsComponents.resourceName = undefined
+  }
+
+  // forbid fragment component
+  wsComponents.fragment = undefined
+
+  return wsComponents
+}
+
+function urnParse (urnComponents, options) {
+  if (!urnComponents.path) {
+    urnComponents.error = 'URN can not be parsed'
+    return urnComponents
+  }
+  const matches = urnComponents.path.match(URN_REG)
+  if (matches) {
+    const scheme = options.scheme || urnComponents.scheme || 'urn'
+    urnComponents.nid = matches[1].toLowerCase()
+    urnComponents.nss = matches[2]
+    const urnScheme = `${scheme}:${options.nid || urnComponents.nid}`
+    const schemeHandler = SCHEMES[urnScheme]
+    urnComponents.path = undefined
+
+    if (schemeHandler) {
+      urnComponents = schemeHandler.parse(urnComponents, options)
+    }
+  } else {
+    urnComponents.error = urnComponents.error || 'URN can not be parsed.'
+  }
+
+  return urnComponents
+}
+
+function urnSerialize (urnComponents, options) {
+  const scheme = options.scheme || urnComponents.scheme || 'urn'
+  const nid = urnComponents.nid.toLowerCase()
+  const urnScheme = `${scheme}:${options.nid || nid}`
+  const schemeHandler = SCHEMES[urnScheme]
+
+  if (schemeHandler) {
+    urnComponents = schemeHandler.serialize(urnComponents, options)
+  }
+
+  const uriComponents = urnComponents
+  const nss = urnComponents.nss
+  uriComponents.path = `${nid || options.nid}:${nss}`
+
+  options.skipEscape = true
+  return uriComponents
+}
+
+function urnuuidParse (urnComponents, options) {
+  const uuidComponents = urnComponents
+  uuidComponents.uuid = uuidComponents.nss
+  uuidComponents.nss = undefined
+
+  if (!options.tolerant && (!uuidComponents.uuid || !UUID_REG.test(uuidComponents.uuid))) {
+    uuidComponents.error = uuidComponents.error || 'UUID is not valid.'
+  }
+
+  return uuidComponents
+}
+
+function urnuuidSerialize (uuidComponents) {
+  const urnComponents = uuidComponents
+  // normalize UUID
+  urnComponents.nss = (uuidComponents.uuid || '').toLowerCase()
+  return urnComponents
+}
+
+const http = {
+  scheme: 'http',
+  domainHost: true,
+  parse: httpParse,
+  serialize: httpSerialize
+}
+
+const https = {
+  scheme: 'https',
+  domainHost: http.domainHost,
+  parse: httpParse,
+  serialize: httpSerialize
+}
+
+const ws = {
+  scheme: 'ws',
+  domainHost: true,
+  parse: wsParse,
+  serialize: wsSerialize
+}
+
+const wss = {
+  scheme: 'wss',
+  domainHost: ws.domainHost,
+  parse: ws.parse,
+  serialize: ws.serialize
+}
+
+const urn = {
+  scheme: 'urn',
+  parse: urnParse,
+  serialize: urnSerialize,
+  skipNormalize: true
+}
+
+const urnuuid = {
+  scheme: 'urn:uuid',
+  parse: urnuuidParse,
+  serialize: urnuuidSerialize,
+  skipNormalize: true
+}
+
+const SCHEMES = {
+  http,
+  https,
+  ws,
+  wss,
+  urn,
+  'urn:uuid': urnuuid
+}
+
+module.exports = SCHEMES
+
+
+/***/ }),
+
+/***/ 83157:
+/***/ ((module) => {
+
+"use strict";
+
+
+const HEX = {
+  0: 0,
+  1: 1,
+  2: 2,
+  3: 3,
+  4: 4,
+  5: 5,
+  6: 6,
+  7: 7,
+  8: 8,
+  9: 9,
+  a: 10,
+  A: 10,
+  b: 11,
+  B: 11,
+  c: 12,
+  C: 12,
+  d: 13,
+  D: 13,
+  e: 14,
+  E: 14,
+  f: 15,
+  F: 15
+}
+
+module.exports = {
+  HEX
+}
+
+
+/***/ }),
+
+/***/ 96743:
+/***/ ((module, __unused_webpack_exports, __nccwpck_require__) => {
+
+"use strict";
+
+
+const { HEX } = __nccwpck_require__(83157)
+
+function normalizeIPv4 (host) {
+  if (findToken(host, '.') < 3) { return { host, isIPV4: false } }
+  const matches = host.match(/^(?:(?:25[0-5]|2[0-4][0-9]|1[0-9][0-9]|[1-9][0-9]|[0-9])\.){3}(?:25[0-5]|2[0-4][0-9]|1[0-9][0-9]|[1-9][0-9]|[0-9])$/u) || []
+  const [address] = matches
+  if (address) {
+    return { host: stripLeadingZeros(address, '.'), isIPV4: true }
+  } else {
+    return { host, isIPV4: false }
+  }
+}
+
+/**
+ * @param {string[]} input
+ * @param {boolean} [keepZero=false]
+ * @returns {string|undefined}
+ */
+function stringArrayToHexStripped (input, keepZero = false) {
+  let acc = ''
+  let strip = true
+  for (const c of input) {
+    if (HEX[c] === undefined) return undefined
+    if (c !== '0' && strip === true) strip = false
+    if (!strip) acc += c
+  }
+  if (keepZero && acc.length === 0) acc = '0'
+  return acc
+}
+
+function getIPV6 (input) {
+  let tokenCount = 0
+  const output = { error: false, address: '', zone: '' }
+  const address = []
+  const buffer = []
+  let isZone = false
+  let endipv6Encountered = false
+  let endIpv6 = false
+
+  function consume () {
+    if (buffer.length) {
+      if (isZone === false) {
+        const hex = stringArrayToHexStripped(buffer)
+        if (hex !== undefined) {
+          address.push(hex)
+        } else {
+          output.error = true
+          return false
+        }
+      }
+      buffer.length = 0
+    }
+    return true
+  }
+
+  for (let i = 0; i < input.length; i++) {
+    const cursor = input[i]
+    if (cursor === '[' || cursor === ']') { continue }
+    if (cursor === ':') {
+      if (endipv6Encountered === true) {
+        endIpv6 = true
+      }
+      if (!consume()) { break }
+      tokenCount++
+      address.push(':')
+      if (tokenCount > 7) {
+        // not valid
+        output.error = true
+        break
+      }
+      if (i - 1 >= 0 && input[i - 1] === ':') {
+        endipv6Encountered = true
+      }
+      continue
+    } else if (cursor === '%') {
+      if (!consume()) { break }
+      // switch to zone detection
+      isZone = true
+    } else {
+      buffer.push(cursor)
+      continue
+    }
+  }
+  if (buffer.length) {
+    if (isZone) {
+      output.zone = buffer.join('')
+    } else if (endIpv6) {
+      address.push(buffer.join(''))
+    } else {
+      address.push(stringArrayToHexStripped(buffer))
+    }
+  }
+  output.address = address.join('')
+  return output
+}
+
+function normalizeIPv6 (host, opts = {}) {
+  if (findToken(host, ':') < 2) { return { host, isIPV6: false } }
+  const ipv6 = getIPV6(host)
+
+  if (!ipv6.error) {
+    let newHost = ipv6.address
+    let escapedHost = ipv6.address
+    if (ipv6.zone) {
+      newHost += '%' + ipv6.zone
+      escapedHost += '%25' + ipv6.zone
+    }
+    return { host: newHost, escapedHost, isIPV6: true }
+  } else {
+    return { host, isIPV6: false }
+  }
+}
+
+function stripLeadingZeros (str, token) {
+  let out = ''
+  let skip = true
+  const l = str.length
+  for (let i = 0; i < l; i++) {
+    const c = str[i]
+    if (c === '0' && skip) {
+      if ((i + 1 <= l && str[i + 1] === token) || i + 1 === l) {
+        out += c
+        skip = false
+      }
+    } else {
+      if (c === token) {
+        skip = true
+      } else {
+        skip = false
+      }
+      out += c
+    }
+  }
+  return out
+}
+
+function findToken (str, token) {
+  let ind = 0
+  for (let i = 0; i < str.length; i++) {
+    if (str[i] === token) ind++
+  }
+  return ind
+}
+
+const RDS1 = /^\.\.?\//u
+const RDS2 = /^\/\.(?:\/|$)/u
+const RDS3 = /^\/\.\.(?:\/|$)/u
+const RDS5 = /^\/?(?:.|\n)*?(?=\/|$)/u
+
+function removeDotSegments (input) {
+  const output = []
+
+  while (input.length) {
+    if (input.match(RDS1)) {
+      input = input.replace(RDS1, '')
+    } else if (input.match(RDS2)) {
+      input = input.replace(RDS2, '/')
+    } else if (input.match(RDS3)) {
+      input = input.replace(RDS3, '/')
+      output.pop()
+    } else if (input === '.' || input === '..') {
+      input = ''
+    } else {
+      const im = input.match(RDS5)
+      if (im) {
+        const s = im[0]
+        input = input.slice(s.length)
+        output.push(s)
+      } else {
+        throw new Error('Unexpected dot segment condition')
+      }
+    }
+  }
+  return output.join('')
+}
+
+function normalizeComponentEncoding (components, esc) {
+  const func = esc !== true ? escape : unescape
+  if (components.scheme !== undefined) {
+    components.scheme = func(components.scheme)
+  }
+  if (components.userinfo !== undefined) {
+    components.userinfo = func(components.userinfo)
+  }
+  if (components.host !== undefined) {
+    components.host = func(components.host)
+  }
+  if (components.path !== undefined) {
+    components.path = func(components.path)
+  }
+  if (components.query !== undefined) {
+    components.query = func(components.query)
+  }
+  if (components.fragment !== undefined) {
+    components.fragment = func(components.fragment)
+  }
+  return components
+}
+
+function recomposeAuthority (components, options) {
+  const uriTokens = []
+
+  if (components.userinfo !== undefined) {
+    uriTokens.push(components.userinfo)
+    uriTokens.push('@')
+  }
+
+  if (components.host !== undefined) {
+    let host = unescape(components.host)
+    const ipV4res = normalizeIPv4(host)
+
+    if (ipV4res.isIPV4) {
+      host = ipV4res.host
+    } else {
+      const ipV6res = normalizeIPv6(ipV4res.host, { isIPV4: false })
+      if (ipV6res.isIPV6 === true) {
+        host = `[${ipV6res.escapedHost}]`
+      } else {
+        host = components.host
+      }
+    }
+    uriTokens.push(host)
+  }
+
+  if (typeof components.port === 'number' || typeof components.port === 'string') {
+    uriTokens.push(':')
+    uriTokens.push(String(components.port))
+  }
+
+  return uriTokens.length ? uriTokens.join('') : undefined
+};
+
+module.exports = {
+  recomposeAuthority,
+  normalizeComponentEncoding,
+  removeDotSegments,
+  normalizeIPv4,
+  normalizeIPv6,
+  stringArrayToHexStripped
+}
+
+
+/***/ }),
+
 /***/ 64775:
 /***/ ((module) => {
 
@@ -118001,7 +117368,7 @@ module.exports = JSON.parse('{"name":"dotenv","version":"16.3.1","description":"
 /***/ ((module) => {
 
 "use strict";
-module.exports = JSON.parse('{"name":"joi","description":"Object schema validation","version":"17.13.1","repository":"git://github.com/hapijs/joi","main":"lib/index.js","types":"lib/index.d.ts","browser":"dist/joi-browser.min.js","files":["lib/**/*","dist/*"],"keywords":["schema","validation"],"dependencies":{"@hapi/hoek":"^9.3.0","@hapi/topo":"^5.1.0","@sideway/address":"^4.1.5","@sideway/formula":"^3.0.1","@sideway/pinpoint":"^2.0.0"},"devDependencies":{"@hapi/bourne":"2.x.x","@hapi/code":"8.x.x","@hapi/joi-legacy-test":"npm:@hapi/joi@15.x.x","@hapi/lab":"^25.1.3","@types/node":"^14.18.63","typescript":"4.3.x"},"scripts":{"prepublishOnly":"cd browser && npm install && npm run build","test":"lab -t 100 -a @hapi/code -L -Y","test-cov-html":"lab -r html -o coverage.html -a @hapi/code"},"license":"BSD-3-Clause"}');
+module.exports = JSON.parse('{"name":"joi","description":"Object schema validation","version":"17.13.3","repository":"git://github.com/hapijs/joi","main":"lib/index.js","types":"lib/index.d.ts","browser":"dist/joi-browser.min.js","files":["lib/**/*","dist/*"],"keywords":["schema","validation"],"dependencies":{"@hapi/hoek":"^9.3.0","@hapi/topo":"^5.1.0","@sideway/address":"^4.1.5","@sideway/formula":"^3.0.1","@sideway/pinpoint":"^2.0.0"},"devDependencies":{"@hapi/bourne":"2.x.x","@hapi/code":"8.x.x","@hapi/joi-legacy-test":"npm:@hapi/joi@15.x.x","@hapi/lab":"^25.1.3","@types/node":"^14.18.63","typescript":"4.3.x"},"scripts":{"prepublishOnly":"cd browser && npm install && npm run build","test":"lab -t 100 -a @hapi/code -L -Y","test-cov-html":"lab -r html -o coverage.html -a @hapi/code"},"license":"BSD-3-Clause"}');
 
 /***/ }),
 
@@ -118025,7 +117392,7 @@ module.exports = JSON.parse('[[[0,44],"disallowed_STD3_valid"],[[45,46],"valid"]
 /***/ ((module) => {
 
 "use strict";
-module.exports = {"version":"3.13.0"};
+module.exports = {"version":"3.13.1"};
 
 /***/ })
 
