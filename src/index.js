@@ -37,6 +37,7 @@ async function main () {
   const techAccId = core.getInput('technicalAccountId')
   const techAccEmail = core.getInput('technicalAccountEmail')
   const imsOrgId = core.getInput('imsOrgId')
+  const forceDeploy = core.getInput('forceDeploy')
 
   // check command
   if (!command) {
@@ -55,6 +56,9 @@ async function main () {
         let deployCmd = 'aio app deploy --no-build'
         if (noPublish === 'true') {
           deployCmd = `${deployCmd} --no-publish`
+        }
+        if (forceDeploy === 'true') {
+          deployCmd = `${deployCmd} --force-deploy`
         }
         console.log(`Executing command ${command}!`)
         await runCLICommand(exec, os, [

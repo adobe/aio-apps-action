@@ -112,6 +112,23 @@ describe('deploy command', () => {
       expect(runCLICommand).toHaveBeenCalledWith(expect.any(Object), actionValues.os, ['aio app deploy --no-build --no-publish'])
     })
   })
+
+  test('noPublish and forceDeploy is true', async () => {
+    const actionValues = {
+      command: 'deploy',
+      noPublish: 'true',
+      forceDeploy: 'true'
+    }
+    core.getInput.mockImplementation((key) => {
+      return actionValues[key]
+    })
+
+    jest.isolateModules(async () => {
+      await require('../src/index') // run the action
+      expect(core.setFailed).not.toHaveBeenCalled()
+      expect(runCLICommand).toHaveBeenCalledWith(expect.any(Object), actionValues.os, ['aio app deploy --no-build --no-publish --force-deploy'])
+    })
+  })
 })
 
 // eslint-disable-next-line jest/valid-title
