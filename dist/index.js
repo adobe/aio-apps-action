@@ -4493,6 +4493,10 @@ class PatchedHttpsProxyAgent extends HttpsProxyAgent {
  * @returns {http.Agent} a http.Agent for basic auth proxy
  */
 function proxyAgent (resourceUrl, proxyAuthOptions) {
+  if (typeof resourceUrl !== 'string') {
+    throw new codes.ERROR_PROXY_FETCH_INITIALIZATION_TYPE({ sdkDetails: { resourceUrl }, messageValues: 'resourceUrl must be of type string' })
+  }
+
   const { proxyUrl, username, password, rejectUnauthorized = true } = proxyAuthOptions
   const proxyOpts = urlToHttpOptions(proxyUrl)
 
@@ -4624,6 +4628,7 @@ module.exports = {
 
 // Define your error codes with the wrapper
 E('ERROR_PROXY_FETCH_INITIALIZATION', 'Proxy fetch initialization error(s). Missing arguments: %s')
+E('ERROR_PROXY_FETCH_INITIALIZATION_TYPE', 'Proxy fetch initialization error(s). Arguments are the wrong type: %s')
 
 
 /***/ }),
@@ -5004,7 +5009,7 @@ class TvmClient {
     // add query params
     Object.keys(params).forEach(k => fullUrl.searchParams.append(k, params[k]))
 
-    const response = await retryRequest.exponentialBackoff(fullUrl,
+    const response = await retryRequest.exponentialBackoff(fullUrl.toString(),
       {
         headers: {
           Authorization: `Basic ${Buffer.from(this.ow.auth).toString('base64')}`,
@@ -5722,6 +5727,7 @@ module.exports = {
 E('HTTP_ERROR', 'error code=%s')
 E('MISSING_PROPERTIES', 'OAuth2 not supported due to some missing properties: %s')
 E('TIMEOUT', 'Timed out after %s seconds.')
+E('IMSOAUTHCLI_LOGIN_CI_ERROR', 'Interactive login is not supported in CI environments. Use a service account and configure credentials via environment variables. See: https://developer.adobe.com/app-builder/docs/guides/deployment/ci_cd_for_firefly_apps/')
 
 
 /***/ }),
@@ -6386,6 +6392,7 @@ governing permissions and limitations under the License.
 const aioLogger = __nccwpck_require__(6737)('@adobe/aio-lib-ims-oauth:login', { provider: 'debug' })
 const ora = __nccwpck_require__(85696)
 const open = __nccwpck_require__(71558)
+const ciInfo = __nccwpck_require__(67816)
 const { randomId, authSiteUrl, getImsCliOAuthUrl, createServer, handleOPTIONS, handleGET, handlePOST, handleUnsupportedHttpMethod } = __nccwpck_require__(65041)
 const { codes: errors } = __nccwpck_require__(11269)
 
@@ -6395,13 +6402,16 @@ const LOGIN_SUCCESS = '/login-success'
 /**
  * Gets the access token / auth code for a signed in user.
  *
- * @param {object} options the optional configuration, { bare, env, timeout, client_id, scope, autoOpen }
- * @param {number} [options.bare=false] set to true to not have any progress text
- * @param {number} [options.timeout] the timeout in seconds
- * @param {string} [options.client_id] the client id of the OAuth2 integration
- * @param {string} [options.scope] the scope of the OAuth2 integration
- * @param {string} [options.redirect_uri] the redirect uri of the OAuth2 integration
- * @returns {Promise} resolves to an access token/auth code
+ * @param {object} options the optional configuration
+ * @param {boolean} [options.bare=false] If true, suppresses spinners and verbose messages, for script-friendly or headless output. If false (default), provides interactive feedback.
+ * @param {string} [options.env] The IMS environment to use.
+ * @param {number} [options.timeout] The timeout in seconds for the login process.
+ * @param {string} [options.client_id] The client id of the OAuth2 integration.
+ * @param {string} [options.scope] The scope of the OAuth2 integration.
+ * @param {boolean} [options.forceLogin] If true, forces the user to log in even if they have an active session.
+ * @param {boolean} [options.autoOpen=true] If true, attempts to automatically open the login URL in the default browser.
+ * @param {string} [options.browser] Specify the browser application to use for opening the login URL.
+ * @returns {Promise<object|string>} Resolves to an access token object or an auth code string.
  */
 async function login (options) {
   aioLogger.debug(`login options: ${JSON.stringify(options)}`)
@@ -6413,7 +6423,7 @@ async function login (options) {
     client_id, // eslint-disable-line camelcase
     scope,
     forceLogin,
-    open: autoOpen = true,
+    autoOpen = true,
     browser: app
   } = options
 
@@ -6428,59 +6438,74 @@ async function login (options) {
 
   return new Promise((resolve, reject) => {
     let spinner
-    if (!bare) {
-      // stderr so it is always visible
+
+    if (ciInfo.isCI && !bare) {
+      // CI path and !bare (so show spinner messages)
       spinner = ora()
-      spinner.stopAndPersist({ text: 'Visit this url to log in:\n' + uri })
-      spinner.start('Waiting for browser login')
-    }
-    if (autoOpen) {
-      open(uri, { app })
-    }
-
-    const timerId = setTimeout(() => {
+      spinner.fail('CI Environment: Interactive login not supported. Use technical account via env vars for authentication. For guidance, see https://github.com/adobe/aio-apps-action')
+      return reject(new errors.IMSOAUTHCLI_LOGIN_CI_ERROR())
+    } else if (ciInfo.isCI) {
+      // CI Environment Path, and bare (so no spinner messages)
+      return reject(new errors.IMSOAUTHCLI_LOGIN_CI_ERROR())
+    } else {
+      // Non-CI Environment Path
       if (!bare) {
-        spinner.fail()
+        // Non-CI, !bare: Interactive mode with spinners
+        spinner = ora()
+        spinner.stopAndPersist({ text: 'Visit this url to log in:\n' + uri })
+        spinner.start('Waiting for browser login')
+      } else {
+        // Non-CI, bare: No spinners. Log URI for manual use
+        console.error(`Login URI (for manual use if browser does not open automatically): ${uri}`)
       }
-      reject(new errors.TIMEOUT({ messageValues: timeout }))
-    }, timeout * 1000)
 
-    const cleanup = () => {
-      clearTimeout(timerId)
-      if (!bare) {
-        spinner.succeed('Login successful')
+      if (autoOpen) {
+        open(uri, { app })
       }
-      server.close()
-    }
 
-    server.on('request', async (request, response) => {
-      aioLogger.debug(`http method: ${request.method}`)
-      try {
-        switch (request.method) {
-          case 'OPTIONS':
-            // we don't want to exit (resolve) here - no cleanup also
-            return handleOPTIONS(request, response, null, env)
-          case 'POST': {
-            const result = await handlePOST(request, response, id, cleanup, env)
-            resolve(result)
-          }
-            break
-          case 'GET': {
-            const result = await handleGET(request, response, id, cleanup, env)
-            resolve(result)
-          }
-            break
-          default:
-            return handleUnsupportedHttpMethod(request, response, cleanup, env)
-        }
-      } catch (error) {
-        if (!bare) {
+      const timerId = setTimeout(() => {
+        if (!bare && spinner) { // Ensure spinner exists
           spinner.fail()
         }
-        cleanup()
-        reject(error)
+        reject(new errors.TIMEOUT({ messageValues: timeout }))
+      }, timeout * 1000)
+
+      const cleanup = () => {
+        clearTimeout(timerId)
+        if (!bare && spinner) { // Ensure spinner exists
+          spinner.succeed('Login successful')
+        }
+        server.close()
       }
-    })
+
+      server.on('request', async (request, response) => {
+        aioLogger.debug(`http method: ${request.method}`)
+        try {
+          switch (request.method) {
+            case 'OPTIONS':
+              return handleOPTIONS(request, response, null, env)
+            case 'POST': {
+              const result = await handlePOST(request, response, id, cleanup, env)
+              resolve(result)
+            }
+              break
+            case 'GET': {
+              const result = await handleGET(request, response, id, cleanup, env)
+              resolve(result)
+            }
+              break
+            default:
+              return handleUnsupportedHttpMethod(request, response, cleanup, env)
+          }
+        } catch (error) {
+          if (!bare && spinner) { // Ensure spinner exists
+            spinner.fail()
+          }
+          cleanup()
+          reject(error)
+        }
+      })
+    }
   })
 }
 
@@ -6774,7 +6799,7 @@ class ConfigCliContext extends Context {
    */
   async getCli () {
     aioLogger.debug('get cli')
-    return this.getContextValue(this.keyNames.CLI)
+    return (await this.getContextValue(this.keyNames.CLI))?.data
   }
 
   /**
@@ -6795,7 +6820,7 @@ class ConfigCliContext extends Context {
     // make sure to not merge any global config into local and vice versa
     const getCli = source => this.getContextValueFromOptionalSource(this.keyNames.CLI, source)
     const existingData = merge ? (local ? getCli('local') : getCli('global')) : {}
-    this.setContextValue(`${this.keyNames.CLI}`, { ...existingData, ...contextData }, local)
+    this.setContextValue(`${this.keyNames.CLI}`, { ...existingData.data, ...contextData }, local)
   }
 
   /**
@@ -6851,7 +6876,10 @@ class ConfigCliContext extends Context {
   /** @private */
   getContextValueFromOptionalSource (key, source) {
     const fullKey = `${this.keyNames.IMS}.${this.keyNames.CONTEXTS}.${key}`
-    return source !== undefined ? this.aioConfig.get(fullKey, source) : this.aioConfig.get(fullKey)
+    return {
+      data: this.aioConfig.get(fullKey, source),
+      local: source === 'local' || (!source && !!this.aioConfig.get(fullKey, 'local'))
+    }
   }
 }
 
@@ -6916,6 +6944,7 @@ class Context {
    *
    *   - `name`: The actual context name used
    *   - `data`: The IMS context data
+   *   - `local`: Whether the context data is stored locally or not
    *
    * @param {string} contextName Name of the context information to return.
    * @returns {Promise<object>} The configuration object
@@ -6928,14 +6957,16 @@ class Context {
     }
 
     if (contextName) {
+      const { data, local } = await this.getContextValue(contextName)
       return {
         name: contextName,
-        data: await this.getContextValue(contextName)
+        data,
+        local
       }
     }
 
     // missing context and no current context
-    return { name: contextName, data: undefined }
+    return { name: contextName, data: undefined, local: false }
   }
 
   /**
@@ -7004,7 +7035,7 @@ class Context {
 
   /**
    * @param {string} contextName context name
-   * @returns {Promise<any>} context value
+   * @returns {Promise<{data: any, local: boolean}>} context value
    * @protected
    * @ignore
    */
@@ -7106,7 +7137,10 @@ class StateActionContext extends Context {
     aioLogger.debug('getContextValue(%s)', key)
     // on first run load the tokens from the cloud State
     await this.loadTokensOnce()
-    return cloneDeep(this.data[this.keyNames.CONTEXTS][key])
+    return {
+      data: cloneDeep(this.data[this.keyNames.CONTEXTS][key]),
+      local: false
+    }
   }
 
   /**
@@ -8111,13 +8145,15 @@ const IMS_TOKEN_MANAGER = {
 
     return this._resolveContext(contextName)
       .then(context => { return { ...context, result: this._getOrCreateToken(context.data, options) } })
-      .then(result => this._persistTokens(result.name, result.data, result.result))
+      .then(result => this._persistTokens(result.name, result.data, result.result, result.local))
   },
 
   async invalidateToken (contextName, force) {
     aioLogger.debug('invalidateToken(%s, %s)', contextName, force)
 
     const tokenLabel = force ? REFRESH_TOKEN : ACCESS_TOKEN
+    // check if token is stored locally, important if context is present both globally and locally
+    const { local } = await this._context.get(`${contextName}.${tokenLabel}`)
     const { name, data } = await this._resolveContext(contextName)
     const ims = new Ims(data.env)
     return this.getTokenIfValid(data[tokenLabel])
@@ -8130,11 +8166,12 @@ const IMS_TOKEN_MANAGER = {
       })
       .then(token => ims.invalidateToken(token, data.client_id, data.client_secret))
       .then(() => {
-        delete data[tokenLabel]
+        // remove only the token(s), in order to avoid accidentally storeing merged local and global values
+        this._context.set(`${contextName}.${tokenLabel}`, undefined, local)
         if (force) {
-          delete data[ACCESS_TOKEN]
+          this._context.set(`${contextName}.${ACCESS_TOKEN}`, undefined, local)
         }
-        return this._context.set(name, data)
+        return this._context.get(name)
       })
   },
 
@@ -8208,9 +8245,10 @@ const IMS_TOKEN_MANAGER = {
    * @param {string} context the ims context name
    * @param {object} contextData the ims context data to persist
    * @param {Promise} resultPromise the promise that contains the results (access token, or access token and refresh token)
+   * @param {boolean} local whether or not the token should be persisted locally, defaults to false
    * @returns {Promise<string>} resolves to the access token
    */
-  async _persistTokens (context, contextData, resultPromise) {
+  async _persistTokens (context, contextData, resultPromise, local = false) {
     aioLogger.debug('persistTokens(%s, %o, %o)', context, contextData, resultPromise)
 
     const result = await resultPromise
@@ -8219,12 +8257,11 @@ const IMS_TOKEN_MANAGER = {
     }
 
     return this.getTokenIfValid(result.access_token)
-      .then(() => { contextData.access_token = result.access_token })
+      .then(() => this._context.set(`${context}.${ACCESS_TOKEN}`, result.access_token, local))
       .then(() => this.getTokenIfValid(result.refresh_token))
       .then(
-        () => { contextData.refresh_token = result.refresh_token },
+        () => this._context.set(`${context}.${REFRESH_TOKEN}`, result.refresh_token, local),
         () => true)
-      .then(() => this._context.set(context, contextData))
       .then(() => result.access_token.token)
   },
 
@@ -23740,9 +23777,7 @@ class Agent extends http.Agent {
     // In order to properly update the socket pool, we need to call `getName()` on
     // the core `https.Agent` if it is a secureEndpoint.
     getName(options) {
-        const secureEndpoint = typeof options.secureEndpoint === 'boolean'
-            ? options.secureEndpoint
-            : this.isSecureEndpoint(options);
+        const secureEndpoint = this.isSecureEndpoint(options);
         if (secureEndpoint) {
             // @ts-expect-error `getName()` isn't defined in `@types/node`
             return https_1.Agent.prototype.getName.call(this, options);
@@ -32252,6 +32287,83 @@ bufferEq.restore = function() {
 
 /***/ }),
 
+/***/ 22639:
+/***/ ((module, __unused_webpack_exports, __nccwpck_require__) => {
+
+"use strict";
+
+
+var bind = __nccwpck_require__(37564);
+
+var $apply = __nccwpck_require__(33945);
+var $call = __nccwpck_require__(88093);
+var $reflectApply = __nccwpck_require__(31330);
+
+/** @type {import('./actualApply')} */
+module.exports = $reflectApply || bind.call($call, $apply);
+
+
+/***/ }),
+
+/***/ 33945:
+/***/ ((module) => {
+
+"use strict";
+
+
+/** @type {import('./functionApply')} */
+module.exports = Function.prototype.apply;
+
+
+/***/ }),
+
+/***/ 88093:
+/***/ ((module) => {
+
+"use strict";
+
+
+/** @type {import('./functionCall')} */
+module.exports = Function.prototype.call;
+
+
+/***/ }),
+
+/***/ 88705:
+/***/ ((module, __unused_webpack_exports, __nccwpck_require__) => {
+
+"use strict";
+
+
+var bind = __nccwpck_require__(37564);
+var $TypeError = __nccwpck_require__(73314);
+
+var $call = __nccwpck_require__(88093);
+var $actualApply = __nccwpck_require__(22639);
+
+/** @type {(args: [Function, thisArg?: unknown, ...args: unknown[]]) => Function} TODO FIXME, find a way to use import('.') */
+module.exports = function callBindBasic(args) {
+	if (args.length < 1 || typeof args[0] !== 'function') {
+		throw new $TypeError('a function is required');
+	}
+	return $actualApply(bind, $call, args);
+};
+
+
+/***/ }),
+
+/***/ 31330:
+/***/ ((module) => {
+
+"use strict";
+
+
+/** @type {import('./reflectApply')} */
+module.exports = typeof Reflect !== 'undefined' && Reflect && Reflect.apply;
+
+
+/***/ }),
+
 /***/ 80465:
 /***/ ((module, __unused_webpack_exports, __nccwpck_require__) => {
 
@@ -36554,7 +36666,7 @@ function save(namespaces) {
 function load() {
 	let r;
 	try {
-		r = exports.storage.getItem('debug');
+		r = exports.storage.getItem('debug') || exports.storage.getItem('DEBUG') ;
 	} catch (error) {
 		// Swallow
 		// XXX (@Qix-) should we be logging these?
@@ -36782,7 +36894,7 @@ function setup(env) {
 
 		const split = (typeof namespaces === 'string' ? namespaces : '')
 			.trim()
-			.replace(' ', ',')
+			.replace(/\s+/g, ',')
 			.split(',')
 			.filter(Boolean);
 
@@ -37817,6 +37929,44 @@ module.exports = DotenvModule
 
 /***/ }),
 
+/***/ 26669:
+/***/ ((module, __unused_webpack_exports, __nccwpck_require__) => {
+
+"use strict";
+
+
+var callBind = __nccwpck_require__(88705);
+var gOPD = __nccwpck_require__(33170);
+
+var hasProtoAccessor;
+try {
+	// eslint-disable-next-line no-extra-parens, no-proto
+	hasProtoAccessor = /** @type {{ __proto__?: typeof Array.prototype }} */ ([]).__proto__ === Array.prototype;
+} catch (e) {
+	if (!e || typeof e !== 'object' || !('code' in e) || e.code !== 'ERR_PROTO_ACCESS') {
+		throw e;
+	}
+}
+
+// eslint-disable-next-line no-extra-parens
+var desc = !!hasProtoAccessor && gOPD && gOPD(Object.prototype, /** @type {keyof typeof Object.prototype} */ ('__proto__'));
+
+var $Object = Object;
+var $getPrototypeOf = $Object.getPrototypeOf;
+
+/** @type {import('./get')} */
+module.exports = desc && typeof desc.get === 'function'
+	? callBind([desc.get])
+	: typeof $getPrototypeOf === 'function'
+		? /** @type {import('./get')} */ function getDunder(value) {
+			// eslint-disable-next-line eqeqeq
+			return $getPrototypeOf(value == null ? value : $Object(value));
+		}
+		: false;
+
+
+/***/ }),
+
 /***/ 325:
 /***/ ((module, __unused_webpack_exports, __nccwpck_require__) => {
 
@@ -38080,6 +38230,167 @@ module.exports = function enabled(name, variable) {
   }
 
   return false;
+};
+
+
+/***/ }),
+
+/***/ 79094:
+/***/ ((module) => {
+
+"use strict";
+
+
+/** @type {import('.')} */
+var $defineProperty = Object.defineProperty || false;
+if ($defineProperty) {
+	try {
+		$defineProperty({}, 'a', { value: 1 });
+	} catch (e) {
+		// IE 8 has a broken defineProperty
+		$defineProperty = false;
+	}
+}
+
+module.exports = $defineProperty;
+
+
+/***/ }),
+
+/***/ 33056:
+/***/ ((module) => {
+
+"use strict";
+
+
+/** @type {import('./eval')} */
+module.exports = EvalError;
+
+
+/***/ }),
+
+/***/ 31620:
+/***/ ((module) => {
+
+"use strict";
+
+
+/** @type {import('.')} */
+module.exports = Error;
+
+
+/***/ }),
+
+/***/ 14585:
+/***/ ((module) => {
+
+"use strict";
+
+
+/** @type {import('./range')} */
+module.exports = RangeError;
+
+
+/***/ }),
+
+/***/ 46905:
+/***/ ((module) => {
+
+"use strict";
+
+
+/** @type {import('./ref')} */
+module.exports = ReferenceError;
+
+
+/***/ }),
+
+/***/ 80105:
+/***/ ((module) => {
+
+"use strict";
+
+
+/** @type {import('./syntax')} */
+module.exports = SyntaxError;
+
+
+/***/ }),
+
+/***/ 73314:
+/***/ ((module) => {
+
+"use strict";
+
+
+/** @type {import('./type')} */
+module.exports = TypeError;
+
+
+/***/ }),
+
+/***/ 32578:
+/***/ ((module) => {
+
+"use strict";
+
+
+/** @type {import('./uri')} */
+module.exports = URIError;
+
+
+/***/ }),
+
+/***/ 95399:
+/***/ ((module) => {
+
+"use strict";
+
+
+/** @type {import('.')} */
+module.exports = Object;
+
+
+/***/ }),
+
+/***/ 88700:
+/***/ ((module, __unused_webpack_exports, __nccwpck_require__) => {
+
+"use strict";
+
+
+var GetIntrinsic = __nccwpck_require__(60470);
+
+var $defineProperty = GetIntrinsic('%Object.defineProperty%', true);
+
+var hasToStringTag = __nccwpck_require__(85479)();
+var hasOwn = __nccwpck_require__(54076);
+var $TypeError = __nccwpck_require__(73314);
+
+var toStringTag = hasToStringTag ? Symbol.toStringTag : null;
+
+/** @type {import('.')} */
+module.exports = function setToStringTag(object, value) {
+	var overrideIfSet = arguments.length > 2 && !!arguments[2] && arguments[2].force;
+	var nonConfigurable = arguments.length > 2 && !!arguments[2] && arguments[2].nonConfigurable;
+	if (
+		(typeof overrideIfSet !== 'undefined' && typeof overrideIfSet !== 'boolean')
+		|| (typeof nonConfigurable !== 'undefined' && typeof nonConfigurable !== 'boolean')
+	) {
+		throw new $TypeError('if provided, the `overrideIfSet` and `nonConfigurable` options must be booleans');
+	}
+	if (toStringTag && (overrideIfSet || !hasOwn(object, toStringTag))) {
+		if ($defineProperty) {
+			$defineProperty(object, toStringTag, {
+				configurable: !nonConfigurable,
+				enumerable: false,
+				value: value,
+				writable: false
+			});
+		} else {
+			object[toStringTag] = value; // eslint-disable-line no-param-reassign
+		}
+	}
 };
 
 
@@ -38834,6 +39145,9 @@ module.exports = function name(fn) {
 /***/ 96454:
 /***/ ((module, __unused_webpack_exports, __nccwpck_require__) => {
 
+"use strict";
+
+
 var CombinedStream = __nccwpck_require__(35630);
 var util = __nccwpck_require__(39023);
 var path = __nccwpck_require__(16928);
@@ -38842,15 +39156,12 @@ var https = __nccwpck_require__(65692);
 var parseUrl = (__nccwpck_require__(87016).parse);
 var fs = __nccwpck_require__(79896);
 var Stream = (__nccwpck_require__(2203).Stream);
+var crypto = __nccwpck_require__(76982);
 var mime = __nccwpck_require__(14096);
 var asynckit = __nccwpck_require__(31324);
+var setToStringTag = __nccwpck_require__(88700);
+var hasOwn = __nccwpck_require__(54076);
 var populate = __nccwpck_require__(11835);
-
-// Public API
-module.exports = FormData;
-
-// make it a Stream
-util.inherits(FormData, CombinedStream);
 
 /**
  * Create readable "multipart/form-data" streams.
@@ -38858,7 +39169,7 @@ util.inherits(FormData, CombinedStream);
  * and file uploads to other web applications.
  *
  * @constructor
- * @param {Object} options - Properties to be added/overriden for FormData and CombinedStream
+ * @param {object} options - Properties to be added/overriden for FormData and CombinedStream
  */
 function FormData(options) {
   if (!(this instanceof FormData)) {
@@ -38871,35 +39182,39 @@ function FormData(options) {
 
   CombinedStream.call(this);
 
-  options = options || {};
-  for (var option in options) {
+  options = options || {}; // eslint-disable-line no-param-reassign
+  for (var option in options) { // eslint-disable-line no-restricted-syntax
     this[option] = options[option];
   }
 }
 
+// make it a Stream
+util.inherits(FormData, CombinedStream);
+
 FormData.LINE_BREAK = '\r\n';
 FormData.DEFAULT_CONTENT_TYPE = 'application/octet-stream';
 
-FormData.prototype.append = function(field, value, options) {
-
-  options = options || {};
+FormData.prototype.append = function (field, value, options) {
+  options = options || {}; // eslint-disable-line no-param-reassign
 
   // allow filename as single option
-  if (typeof options == 'string') {
-    options = {filename: options};
+  if (typeof options === 'string') {
+    options = { filename: options }; // eslint-disable-line no-param-reassign
   }
 
   var append = CombinedStream.prototype.append.bind(this);
 
   // all that streamy business can't handle numbers
-  if (typeof value == 'number') {
-    value = '' + value;
+  if (typeof value === 'number' || value == null) {
+    value = String(value); // eslint-disable-line no-param-reassign
   }
 
   // https://github.com/felixge/node-form-data/issues/38
   if (Array.isArray(value)) {
-    // Please convert your array into string
-    // the way web server expects it
+    /*
+     * Please convert your array into string
+     * the way web server expects it
+     */
     this._error(new Error('Arrays are not supported.'));
     return;
   }
@@ -38915,15 +39230,17 @@ FormData.prototype.append = function(field, value, options) {
   this._trackLength(header, value, options);
 };
 
-FormData.prototype._trackLength = function(header, value, options) {
+FormData.prototype._trackLength = function (header, value, options) {
   var valueLength = 0;
 
-  // used w/ getLengthSync(), when length is known.
-  // e.g. for streaming directly from a remote server,
-  // w/ a known file a size, and not wanting to wait for
-  // incoming file to finish to get its size.
+  /*
+   * used w/ getLengthSync(), when length is known.
+   * e.g. for streaming directly from a remote server,
+   * w/ a known file a size, and not wanting to wait for
+   * incoming file to finish to get its size.
+   */
   if (options.knownLength != null) {
-    valueLength += +options.knownLength;
+    valueLength += Number(options.knownLength);
   } else if (Buffer.isBuffer(value)) {
     valueLength = value.length;
   } else if (typeof value === 'string') {
@@ -38933,12 +39250,10 @@ FormData.prototype._trackLength = function(header, value, options) {
   this._valueLength += valueLength;
 
   // @check why add CRLF? does this account for custom/multiple CRLFs?
-  this._overheadLength +=
-    Buffer.byteLength(header) +
-    FormData.LINE_BREAK.length;
+  this._overheadLength += Buffer.byteLength(header) + FormData.LINE_BREAK.length;
 
   // empty or either doesn't have path or not an http response or not a stream
-  if (!value || ( !value.path && !(value.readable && value.hasOwnProperty('httpVersion')) && !(value instanceof Stream))) {
+  if (!value || (!value.path && !(value.readable && hasOwn(value, 'httpVersion')) && !(value instanceof Stream))) {
     return;
   }
 
@@ -38948,10 +39263,8 @@ FormData.prototype._trackLength = function(header, value, options) {
   }
 };
 
-FormData.prototype._lengthRetriever = function(value, callback) {
-
-  if (value.hasOwnProperty('fd')) {
-
+FormData.prototype._lengthRetriever = function (value, callback) {
+  if (hasOwn(value, 'fd')) {
     // take read range into a account
     // `end` = Infinity –> read file till the end
     //
@@ -38960,54 +39273,52 @@ FormData.prototype._lengthRetriever = function(value, callback) {
     // Fix it when node fixes it.
     // https://github.com/joyent/node/issues/7819
     if (value.end != undefined && value.end != Infinity && value.start != undefined) {
-
       // when end specified
       // no need to calculate range
       // inclusive, starts with 0
-      callback(null, value.end + 1 - (value.start ? value.start : 0));
+      callback(null, value.end + 1 - (value.start ? value.start : 0)); // eslint-disable-line callback-return
 
-    // not that fast snoopy
+      // not that fast snoopy
     } else {
       // still need to fetch file size from fs
-      fs.stat(value.path, function(err, stat) {
-
-        var fileSize;
-
+      fs.stat(value.path, function (err, stat) {
         if (err) {
           callback(err);
           return;
         }
 
         // update final size based on the range options
-        fileSize = stat.size - (value.start ? value.start : 0);
+        var fileSize = stat.size - (value.start ? value.start : 0);
         callback(null, fileSize);
       });
     }
 
-  // or http response
-  } else if (value.hasOwnProperty('httpVersion')) {
-    callback(null, +value.headers['content-length']);
+    // or http response
+  } else if (hasOwn(value, 'httpVersion')) {
+    callback(null, Number(value.headers['content-length'])); // eslint-disable-line callback-return
 
-  // or request stream http://github.com/mikeal/request
-  } else if (value.hasOwnProperty('httpModule')) {
+    // or request stream http://github.com/mikeal/request
+  } else if (hasOwn(value, 'httpModule')) {
     // wait till response come back
-    value.on('response', function(response) {
+    value.on('response', function (response) {
       value.pause();
-      callback(null, +response.headers['content-length']);
+      callback(null, Number(response.headers['content-length']));
     });
     value.resume();
 
-  // something else
+    // something else
   } else {
-    callback('Unknown stream');
+    callback('Unknown stream'); // eslint-disable-line callback-return
   }
 };
 
-FormData.prototype._multiPartHeader = function(field, value, options) {
-  // custom header specified (as string)?
-  // it becomes responsible for boundary
-  // (e.g. to handle extra CRLFs on .NET servers)
-  if (typeof options.header == 'string') {
+FormData.prototype._multiPartHeader = function (field, value, options) {
+  /*
+   * custom header specified (as string)?
+   * it becomes responsible for boundary
+   * (e.g. to handle extra CRLFs on .NET servers)
+   */
+  if (typeof options.header === 'string') {
     return options.header;
   }
 
@@ -39015,7 +39326,7 @@ FormData.prototype._multiPartHeader = function(field, value, options) {
   var contentType = this._getContentType(value, options);
 
   var contents = '';
-  var headers  = {
+  var headers = {
     // add custom disposition as third element or keep it two elements if not
     'Content-Disposition': ['form-data', 'name="' + field + '"'].concat(contentDisposition || []),
     // if no content type. allow it to be empty array
@@ -39023,77 +39334,74 @@ FormData.prototype._multiPartHeader = function(field, value, options) {
   };
 
   // allow custom headers.
-  if (typeof options.header == 'object') {
+  if (typeof options.header === 'object') {
     populate(headers, options.header);
   }
 
   var header;
-  for (var prop in headers) {
-    if (!headers.hasOwnProperty(prop)) continue;
-    header = headers[prop];
+  for (var prop in headers) { // eslint-disable-line no-restricted-syntax
+    if (hasOwn(headers, prop)) {
+      header = headers[prop];
 
-    // skip nullish headers.
-    if (header == null) {
-      continue;
-    }
+      // skip nullish headers.
+      if (header == null) {
+        continue; // eslint-disable-line no-restricted-syntax, no-continue
+      }
 
-    // convert all headers to arrays.
-    if (!Array.isArray(header)) {
-      header = [header];
-    }
+      // convert all headers to arrays.
+      if (!Array.isArray(header)) {
+        header = [header];
+      }
 
-    // add non-empty headers.
-    if (header.length) {
-      contents += prop + ': ' + header.join('; ') + FormData.LINE_BREAK;
+      // add non-empty headers.
+      if (header.length) {
+        contents += prop + ': ' + header.join('; ') + FormData.LINE_BREAK;
+      }
     }
   }
 
   return '--' + this.getBoundary() + FormData.LINE_BREAK + contents + FormData.LINE_BREAK;
 };
 
-FormData.prototype._getContentDisposition = function(value, options) {
-
-  var filename
-    , contentDisposition
-    ;
+FormData.prototype._getContentDisposition = function (value, options) { // eslint-disable-line consistent-return
+  var filename;
 
   if (typeof options.filepath === 'string') {
     // custom filepath for relative paths
     filename = path.normalize(options.filepath).replace(/\\/g, '/');
-  } else if (options.filename || value.name || value.path) {
-    // custom filename take precedence
-    // formidable and the browser add a name property
-    // fs- and request- streams have path property
-    filename = path.basename(options.filename || value.name || value.path);
-  } else if (value.readable && value.hasOwnProperty('httpVersion')) {
+  } else if (options.filename || (value && (value.name || value.path))) {
+    /*
+     * custom filename take precedence
+     * formidable and the browser add a name property
+     * fs- and request- streams have path property
+     */
+    filename = path.basename(options.filename || (value && (value.name || value.path)));
+  } else if (value && value.readable && hasOwn(value, 'httpVersion')) {
     // or try http response
     filename = path.basename(value.client._httpMessage.path || '');
   }
 
   if (filename) {
-    contentDisposition = 'filename="' + filename + '"';
+    return 'filename="' + filename + '"';
   }
-
-  return contentDisposition;
 };
 
-FormData.prototype._getContentType = function(value, options) {
-
+FormData.prototype._getContentType = function (value, options) {
   // use custom content-type above all
   var contentType = options.contentType;
 
   // or try `name` from formidable, browser
-  if (!contentType && value.name) {
+  if (!contentType && value && value.name) {
     contentType = mime.lookup(value.name);
   }
 
   // or try `path` from fs-, request- streams
-  if (!contentType && value.path) {
+  if (!contentType && value && value.path) {
     contentType = mime.lookup(value.path);
   }
 
   // or if it's http-reponse
-  if (!contentType && value.readable && value.hasOwnProperty('httpVersion')) {
+  if (!contentType && value && value.readable && hasOwn(value, 'httpVersion')) {
     contentType = value.headers['content-type'];
   }
 
@@ -39103,18 +39411,18 @@ FormData.prototype._getContentType = function(value, options) {
   }
 
   // fallback to the default content type if `value` is not simple value
-  if (!contentType && typeof value == 'object') {
+  if (!contentType && value && typeof value === 'object') {
     contentType = FormData.DEFAULT_CONTENT_TYPE;
   }
 
   return contentType;
 };
 
-FormData.prototype._multiPartFooter = function() {
-  return function(next) {
+FormData.prototype._multiPartFooter = function () {
+  return function (next) {
     var footer = FormData.LINE_BREAK;
 
-    var lastPart = (this._streams.length === 0);
+    var lastPart = this._streams.length === 0;
     if (lastPart) {
       footer += this._lastBoundary();
     }
@@ -39123,18 +39431,18 @@ FormData.prototype._multiPartFooter = function() {
   }.bind(this);
 };
 
-FormData.prototype._lastBoundary = function() {
+FormData.prototype._lastBoundary = function () {
   return '--' + this.getBoundary() + '--' + FormData.LINE_BREAK;
 };
 
-FormData.prototype.getHeaders = function(userHeaders) {
+FormData.prototype.getHeaders = function (userHeaders) {
   var header;
   var formHeaders = {
     'content-type': 'multipart/form-data; boundary=' + this.getBoundary()
   };
 
-  for (header in userHeaders) {
-    if (userHeaders.hasOwnProperty(header)) {
+  for (header in userHeaders) { // eslint-disable-line no-restricted-syntax
+    if (hasOwn(userHeaders, header)) {
       formHeaders[header.toLowerCase()] = userHeaders[header];
     }
   }
@@ -39142,11 +39450,14 @@ FormData.prototype.getHeaders = function(userHeaders) {
   return formHeaders;
 };
 
-FormData.prototype.setBoundary = function(boundary) {
+FormData.prototype.setBoundary = function (boundary) {
+  if (typeof boundary !== 'string') {
+    throw new TypeError('FormData boundary must be a string');
+  }
   this._boundary = boundary;
 };
 
-FormData.prototype.getBoundary = function() {
+FormData.prototype.getBoundary = function () {
   if (!this._boundary) {
     this._generateBoundary();
   }
@@ -39154,60 +39465,55 @@ FormData.prototype.getBoundary = function() {
   return this._boundary;
 };
 
-FormData.prototype.getBuffer = function() {
-  var dataBuffer = new Buffer.alloc( 0 );
+FormData.prototype.getBuffer = function () {
+  var dataBuffer = new Buffer.alloc(0); // eslint-disable-line new-cap
   var boundary = this.getBoundary();
 
   // Create the form content. Add Line breaks to the end of data.
   for (var i = 0, len = this._streams.length; i < len; i++) {
     if (typeof this._streams[i] !== 'function') {
-
       // Add content to the buffer.
-      if(Buffer.isBuffer(this._streams[i])) {
-        dataBuffer = Buffer.concat( [dataBuffer, this._streams[i]]);
-      }else {
-        dataBuffer = Buffer.concat( [dataBuffer, Buffer.from(this._streams[i])]);
+      if (Buffer.isBuffer(this._streams[i])) {
+        dataBuffer = Buffer.concat([dataBuffer, this._streams[i]]);
+      } else {
+        dataBuffer = Buffer.concat([dataBuffer, Buffer.from(this._streams[i])]);
       }
 
       // Add break after content.
-      if (typeof this._streams[i] !== 'string' || this._streams[i].substring( 2, boundary.length + 2 ) !== boundary) {
-        dataBuffer = Buffer.concat( [dataBuffer, Buffer.from(FormData.LINE_BREAK)] );
+      if (typeof this._streams[i] !== 'string' || this._streams[i].substring(2, boundary.length + 2) !== boundary) {
+        dataBuffer = Buffer.concat([dataBuffer, Buffer.from(FormData.LINE_BREAK)]);
       }
     }
   }
 
   // Add the footer and return the Buffer object.
-  return Buffer.concat( [dataBuffer, Buffer.from(this._lastBoundary())] );
+  return Buffer.concat([dataBuffer, Buffer.from(this._lastBoundary())]);
 };
 
-FormData.prototype._generateBoundary = function() {
+FormData.prototype._generateBoundary = function () {
   // This generates a 50 character boundary similar to those used by Firefox.
-  // They are optimized for boyer-moore parsing.
-  var boundary = '--------------------------';
-  for (var i = 0; i < 24; i++) {
-    boundary += Math.floor(Math.random() * 10).toString(16);
-  }
 
-  this._boundary = boundary;
+  // They are optimized for boyer-moore parsing.
+  this._boundary = '--------------------------' + crypto.randomBytes(12).toString('hex');
 };
 
 // Note: getLengthSync DOESN'T calculate streams length
-// As workaround one can calculate file size manually
-// and add it as knownLength option
-FormData.prototype.getLengthSync = function() {
+// As workaround one can calculate file size manually and add it as knownLength option
+FormData.prototype.getLengthSync = function () {
   var knownLength = this._overheadLength + this._valueLength;
 
-  // Don't get confused, there are 3 "internal" streams for each keyval pair
-  // so it basically checks if there is any value added to the form
+  // Don't get confused, there are 3 "internal" streams for each keyval pair so it basically checks if there is any value added to the form
   if (this._streams.length) {
     knownLength += this._lastBoundary().length;
   }
 
   // https://github.com/form-data/form-data/issues/40
   if (!this.hasKnownLength()) {
-    // Some async length retrievers are present
-    // therefore synchronous length calculation is false.
-    // Please use getLength(callback) to get proper length
+    /*
+     * Some async length retrievers are present
+     * therefore synchronous length calculation is false.
+     * Please use getLength(callback) to get proper length
+     */
     this._error(new Error('Cannot calculate proper length in synchronous way.'));
   }
 
@@ -39217,7 +39523,7 @@ FormData.prototype.getLengthSync = function() {
 // Public API to check if length of added values is known
 // https://github.com/form-data/form-data/issues/196
 // https://github.com/form-data/form-data/issues/262
-FormData.prototype.hasKnownLength = function() {
+FormData.prototype.hasKnownLength = function () {
   var hasKnownLength = true;
 
   if (this._valuesToMeasure.length) {
@@ -39227,7 +39533,7 @@ FormData.prototype.hasKnownLength = function() {
   return hasKnownLength;
 };
 
-FormData.prototype.getLength = function(cb) {
+FormData.prototype.getLength = function (cb) {
   var knownLength = this._overheadLength + this._valueLength;
 
   if (this._streams.length) {
@@ -39239,13 +39545,13 @@ FormData.prototype.getLength = function(cb) {
     return;
   }
 
-  asynckit.parallel(this._valuesToMeasure, this._lengthRetriever, function(err, values) {
+  asynckit.parallel(this._valuesToMeasure, this._lengthRetriever, function (err, values) {
     if (err) {
       cb(err);
       return;
     }
 
-    values.forEach(function(length) {
+    values.forEach(function (length) {
       knownLength += length;
     });
 
@@ -39253,31 +39559,26 @@ FormData.prototype.getLength = function(cb) {
   });
 };
 
-FormData.prototype.submit = function(params, cb) {
-  var request
-    , options
-    , defaults = {method: 'post'}
-    ;
+FormData.prototype.submit = function (params, cb) {
+  var request;
+  var options;
+  var defaults = { method: 'post' };
 
-  // parse provided url if it's string
-  // or treat it as options object
-  if (typeof params == 'string') {
-
-    params = parseUrl(params);
+  // parse provided url if it's string or treat it as options object
+  if (typeof params === 'string') {
+    params = parseUrl(params); // eslint-disable-line no-param-reassign
+    /* eslint sort-keys: 0 */
     options = populate({
       port: params.port,
       path: params.pathname,
       host: params.hostname,
       protocol: params.protocol
     }, defaults);
-
-  // use custom params
-  } else {
-
+  } else { // use custom params
     options = populate(params, defaults);
     // if no port provided use default one
     if (!options.port) {
-      options.port = options.protocol == 'https:' ? 443 : 80;
+      options.port = options.protocol === 'https:' ? 443 : 80;
     }
   }
 
@@ -39285,14 +39586,14 @@ FormData.prototype.submit = function(params, cb) {
   options.headers = this.getHeaders(params.headers);
 
   // https if specified, fallback to http in any other case
-  if (options.protocol == 'https:') {
+  if (options.protocol === 'https:') {
     request = https.request(options);
   } else {
     request = http.request(options);
   }
 
   // get content length and fire away
-  this.getLength(function(err, length) {
+  this.getLength(function (err, length) {
     if (err && err !== 'Unknown stream') {
       this._error(err);
       return;
@@ -39311,7 +39612,7 @@ FormData.prototype.submit = function(params, cb) {
         request.removeListener('error', callback);
         request.removeListener('response', onResponse);
 
-        return cb.call(this, error, responce);
+        return cb.call(this, error, responce); // eslint-disable-line no-invalid-this
       };
 
       onResponse = callback.bind(this, null);
@@ -39324,7 +39625,7 @@ FormData.prototype.submit = function(params, cb) {
   return request;
 };
 
-FormData.prototype._error = function(err) {
+FormData.prototype._error = function (err) {
   if (!this.error) {
     this.error = err;
     this.pause();
@@ -39335,6 +39636,10 @@ FormData.prototype._error = function(err) {
 FormData.prototype.toString = function () {
   return '[object FormData]';
 };
+setToStringTag(FormData, 'FormData');
+
+// Public API
+module.exports = FormData;
 
 
 /***/ }),
@@ -39342,12 +39647,13 @@ FormData.prototype.toString = function () {
 /***/ 11835:
 /***/ ((module) => {
 
-// populates missing values
-module.exports = function(dst, src) {
+"use strict";
 
-  Object.keys(src).forEach(function(prop)
-  {
-    dst[prop] = dst[prop] || src[prop];
+
+// populates missing values
+module.exports = function (dst, src) {
+  Object.keys(src).forEach(function (prop) {
+    dst[prop] = dst[prop] || src[prop]; // eslint-disable-line no-param-reassign
   });
 
   return dst;
@@ -40902,7 +41208,8 @@ function checkParentPathsSync (src, srcStat, dest, funcName) {
 }
 
 function areIdentical (srcStat, destStat) {
-  return destStat.ino && destStat.dev && destStat.ino === srcStat.ino && destStat.dev === srcStat.dev
+  // stat.dev can be 0n on windows when node version >= 22.x.x
+  return destStat.ino !== undefined && destStat.dev !== undefined && destStat.ino === srcStat.ino && destStat.dev === srcStat.dev
 }
 
 // return true if dest is a subdir of src, otherwise false.
@@ -40972,6 +41279,593 @@ module.exports = {
   utimesMillis: u(utimesMillis),
   utimesMillisSync
 }
+
+
+/***/ }),
+
+/***/ 99808:
+/***/ ((module) => {
+
+"use strict";
+
+
+/* eslint no-invalid-this: 1 */
+
+var ERROR_MESSAGE = 'Function.prototype.bind called on incompatible ';
+var toStr = Object.prototype.toString;
+var max = Math.max;
+var funcType = '[object Function]';
+
+var concatty = function concatty(a, b) {
+    var arr = [];
+
+    for (var i = 0; i < a.length; i += 1) {
+        arr[i] = a[i];
+    }
+    for (var j = 0; j < b.length; j += 1) {
+        arr[j + a.length] = b[j];
+    }
+
+    return arr;
+};
+
+var slicy = function slicy(arrLike, offset) {
+    var arr = [];
+    for (var i = offset || 0, j = 0; i < arrLike.length; i += 1, j += 1) {
+        arr[j] = arrLike[i];
+    }
+    return arr;
+};
+
+var joiny = function (arr, joiner) {
+    var str = '';
+    for (var i = 0; i < arr.length; i += 1) {
+        str += arr[i];
+        if (i + 1 < arr.length) {
+            str += joiner;
+        }
+    }
+    return str;
+};
+
+module.exports = function bind(that) {
+    var target = this;
+    if (typeof target !== 'function' || toStr.apply(target) !== funcType) {
+        throw new TypeError(ERROR_MESSAGE + target);
+    }
+    var args = slicy(arguments, 1);
+
+    var bound;
+    var binder = function () {
+        if (this instanceof bound) {
+            var result = target.apply(
+                this,
+                concatty(args, arguments)
+            );
+            if (Object(result) === result) {
+                return result;
+            }
+            return this;
+        }
+        return target.apply(
+            that,
+            concatty(args, arguments)
+        );
+
+    };
+
+    var boundLength = max(0, target.length - args.length);
+    var boundArgs = [];
+    for (var i = 0; i < boundLength; i++) {
+        boundArgs[i] = '$' + i;
+    }
+
+    bound = Function('binder', 'return function (' + joiny(boundArgs, ',') + '){ return binder.apply(this,arguments); }')(binder);
+
+    if (target.prototype) {
+        var Empty = function Empty() {};
+        Empty.prototype = target.prototype;
+        bound.prototype = new Empty();
+        Empty.prototype = null;
+    }
+
+    return bound;
+};
+
+
+/***/ }),
+
+/***/ 37564:
+/***/ ((module, __unused_webpack_exports, __nccwpck_require__) => {
+
+"use strict";
+
+
+var implementation = __nccwpck_require__(99808);
+
+module.exports = Function.prototype.bind || implementation;
+
+
+/***/ }),
+
+/***/ 60470:
+/***/ ((module, __unused_webpack_exports, __nccwpck_require__) => {
+
+"use strict";
+
+
+var undefined;
+
+var $Object = __nccwpck_require__(95399);
+
+var $Error = __nccwpck_require__(31620);
+var $EvalError = __nccwpck_require__(33056);
+var $RangeError = __nccwpck_require__(14585);
+var $ReferenceError = __nccwpck_require__(46905);
+var $SyntaxError = __nccwpck_require__(80105);
+var $TypeError = __nccwpck_require__(73314);
+var $URIError = __nccwpck_require__(32578);
+
+var abs = __nccwpck_require__(55641);
+var floor = __nccwpck_require__(96171);
+var max = __nccwpck_require__(57147);
+var min = __nccwpck_require__(41017);
+var pow = __nccwpck_require__(56947);
+var round = __nccwpck_require__(42621);
+var sign = __nccwpck_require__(30156);
+
+var $Function = Function;
+
+// eslint-disable-next-line consistent-return
+var getEvalledConstructor = function (expressionSyntax) {
+	try {
+		return $Function('"use strict"; return (' + expressionSyntax + ').constructor;')();
+	} catch (e) {}
+};
+
+var $gOPD = __nccwpck_require__(33170);
+var $defineProperty = __nccwpck_require__(79094);
+
+var throwTypeError = function () {
+	throw new $TypeError();
+};
+var ThrowTypeError = $gOPD
+	? (function () {
+		try {
+			// eslint-disable-next-line no-unused-expressions, no-caller, no-restricted-properties
+			arguments.callee; // IE 8 does not throw here
+			return throwTypeError;
+		} catch (calleeThrows) {
+			try {
+				// IE 8 throws on Object.getOwnPropertyDescriptor(arguments, '')
+				return $gOPD(arguments, 'callee').get;
+			} catch (gOPDthrows) {
+				return throwTypeError;
+			}
+		}
+	}())
+	: throwTypeError;
+
+var hasSymbols = __nccwpck_require__(23336)();
+
+var getProto = __nccwpck_require__(81967);
+var $ObjectGPO = __nccwpck_require__(91311);
+var $ReflectGPO = __nccwpck_require__(48681);
+
+var $apply = __nccwpck_require__(33945);
+var $call = __nccwpck_require__(88093);
+
+var needsEval = {};
+
+var TypedArray = typeof Uint8Array === 'undefined' || !getProto ? undefined : getProto(Uint8Array);
+
+var INTRINSICS = {
+	__proto__: null,
+	'%AggregateError%': typeof AggregateError === 'undefined' ? undefined : AggregateError,
+	'%Array%': Array,
+	'%ArrayBuffer%': typeof ArrayBuffer === 'undefined' ? undefined : ArrayBuffer,
+	'%ArrayIteratorPrototype%': hasSymbols && getProto ? getProto([][Symbol.iterator]()) : undefined,
+	'%AsyncFromSyncIteratorPrototype%': undefined,
+	'%AsyncFunction%': needsEval,
+	'%AsyncGenerator%': needsEval,
+	'%AsyncGeneratorFunction%': needsEval,
+	'%AsyncIteratorPrototype%': needsEval,
+	'%Atomics%': typeof Atomics === 'undefined' ? undefined : Atomics,
+	'%BigInt%': typeof BigInt === 'undefined' ? undefined : BigInt,
+	'%BigInt64Array%': typeof BigInt64Array === 'undefined' ? undefined : BigInt64Array,
+	'%BigUint64Array%': typeof BigUint64Array === 'undefined' ? undefined : BigUint64Array,
+	'%Boolean%': Boolean,
+	'%DataView%': typeof DataView === 'undefined' ? undefined : DataView,
+	'%Date%': Date,
+	'%decodeURI%': decodeURI,
+	'%decodeURIComponent%': decodeURIComponent,
+	'%encodeURI%': encodeURI,
+	'%encodeURIComponent%': encodeURIComponent,
+	'%Error%': $Error,
+	'%eval%': eval, // eslint-disable-line no-eval
+	'%EvalError%': $EvalError,
+	'%Float16Array%': typeof Float16Array === 'undefined' ? undefined : Float16Array,
+	'%Float32Array%': typeof Float32Array === 'undefined' ? undefined : Float32Array,
+	'%Float64Array%': typeof Float64Array === 'undefined' ? undefined : Float64Array,
+	'%FinalizationRegistry%': typeof FinalizationRegistry === 'undefined' ? undefined : FinalizationRegistry,
+	'%Function%': $Function,
+	'%GeneratorFunction%': needsEval,
+	'%Int8Array%': typeof Int8Array === 'undefined' ? undefined : Int8Array,
+	'%Int16Array%': typeof Int16Array === 'undefined' ? undefined : Int16Array,
+	'%Int32Array%': typeof Int32Array === 'undefined' ? undefined : Int32Array,
+	'%isFinite%': isFinite,
+	'%isNaN%': isNaN,
+	'%IteratorPrototype%': hasSymbols && getProto ? getProto(getProto([][Symbol.iterator]())) : undefined,
+	'%JSON%': typeof JSON === 'object' ? JSON : undefined,
+	'%Map%': typeof Map === 'undefined' ? undefined : Map,
+	'%MapIteratorPrototype%': typeof Map === 'undefined' || !hasSymbols || !getProto ? undefined : getProto(new Map()[Symbol.iterator]()),
+	'%Math%': Math,
+	'%Number%': Number,
+	'%Object%': $Object,
+	'%Object.getOwnPropertyDescriptor%': $gOPD,
+	'%parseFloat%': parseFloat,
+	'%parseInt%': parseInt,
+	'%Promise%': typeof Promise === 'undefined' ? undefined : Promise,
+	'%Proxy%': typeof Proxy === 'undefined' ? undefined : Proxy,
+	'%RangeError%': $RangeError,
+	'%ReferenceError%': $ReferenceError,
+	'%Reflect%': typeof Reflect === 'undefined' ? undefined : Reflect,
+	'%RegExp%': RegExp,
+	'%Set%': typeof Set === 'undefined' ? undefined : Set,
+	'%SetIteratorPrototype%': typeof Set === 'undefined' || !hasSymbols || !getProto ? undefined : getProto(new Set()[Symbol.iterator]()),
+	'%SharedArrayBuffer%': typeof SharedArrayBuffer === 'undefined' ? undefined : SharedArrayBuffer,
+	'%String%': String,
+	'%StringIteratorPrototype%': hasSymbols && getProto ? getProto(''[Symbol.iterator]()) : undefined,
+	'%Symbol%': hasSymbols ? Symbol : undefined,
+	'%SyntaxError%': $SyntaxError,
+	'%ThrowTypeError%': ThrowTypeError,
+	'%TypedArray%': TypedArray,
+	'%TypeError%': $TypeError,
+	'%Uint8Array%': typeof Uint8Array === 'undefined' ? undefined : Uint8Array,
+	'%Uint8ClampedArray%': typeof Uint8ClampedArray === 'undefined' ? undefined : Uint8ClampedArray,
+	'%Uint16Array%': typeof Uint16Array === 'undefined' ? undefined : Uint16Array,
+	'%Uint32Array%': typeof Uint32Array === 'undefined' ? undefined : Uint32Array,
+	'%URIError%': $URIError,
+	'%WeakMap%': typeof WeakMap === 'undefined' ? undefined : WeakMap,
+	'%WeakRef%': typeof WeakRef === 'undefined' ? undefined : WeakRef,
+	'%WeakSet%': typeof WeakSet === 'undefined' ? undefined : WeakSet,
+
+	'%Function.prototype.call%': $call,
+	'%Function.prototype.apply%': $apply,
+	'%Object.defineProperty%': $defineProperty,
+	'%Object.getPrototypeOf%': $ObjectGPO,
+	'%Math.abs%': abs,
+	'%Math.floor%': floor,
+	'%Math.max%': max,
+	'%Math.min%': min,
+	'%Math.pow%': pow,
+	'%Math.round%': round,
+	'%Math.sign%': sign,
+	'%Reflect.getPrototypeOf%': $ReflectGPO
+};
+
+if (getProto) {
+	try {
+		null.error; // eslint-disable-line no-unused-expressions
+	} catch (e) {
+		// https://github.com/tc39/proposal-shadowrealm/pull/384#issuecomment-1364264229
+		var errorProto = getProto(getProto(e));
+		INTRINSICS['%Error.prototype%'] = errorProto;
+	}
+}
+
+var doEval = function doEval(name) {
+	var value;
+	if (name === '%AsyncFunction%') {
+		value = getEvalledConstructor('async function () {}');
+	} else if (name === '%GeneratorFunction%') {
+		value = getEvalledConstructor('function* () {}');
+	} else if (name === '%AsyncGeneratorFunction%') {
+		value = getEvalledConstructor('async function* () {}');
+	} else if (name === '%AsyncGenerator%') {
+		var fn = doEval('%AsyncGeneratorFunction%');
+		if (fn) {
+			value = fn.prototype;
+		}
+	} else if (name === '%AsyncIteratorPrototype%') {
+		var gen = doEval('%AsyncGenerator%');
+		if (gen && getProto) {
+			value = getProto(gen.prototype);
+		}
+	}
+
+	INTRINSICS[name] = value;
+
+	return value;
+};
+
+var LEGACY_ALIASES = {
+	__proto__: null,
+	'%ArrayBufferPrototype%': ['ArrayBuffer', 'prototype'],
+	'%ArrayPrototype%': ['Array', 'prototype'],
+	'%ArrayProto_entries%': ['Array', 'prototype', 'entries'],
+	'%ArrayProto_forEach%': ['Array', 'prototype', 'forEach'],
+	'%ArrayProto_keys%': ['Array', 'prototype', 'keys'],
+	'%ArrayProto_values%': ['Array', 'prototype', 'values'],
+	'%AsyncFunctionPrototype%': ['AsyncFunction', 'prototype'],
+	'%AsyncGenerator%': ['AsyncGeneratorFunction', 'prototype'],
+	'%AsyncGeneratorPrototype%': ['AsyncGeneratorFunction', 'prototype', 'prototype'],
+	'%BooleanPrototype%': ['Boolean', 'prototype'],
+	'%DataViewPrototype%': ['DataView', 'prototype'],
+	'%DatePrototype%': ['Date', 'prototype'],
+	'%ErrorPrototype%': ['Error', 'prototype'],
+	'%EvalErrorPrototype%': ['EvalError', 'prototype'],
+	'%Float32ArrayPrototype%': ['Float32Array', 'prototype'],
+	'%Float64ArrayPrototype%': ['Float64Array', 'prototype'],
+	'%FunctionPrototype%': ['Function', 'prototype'],
+	'%Generator%': ['GeneratorFunction', 'prototype'],
+	'%GeneratorPrototype%': ['GeneratorFunction', 'prototype', 'prototype'],
+	'%Int8ArrayPrototype%': ['Int8Array', 'prototype'],
+	'%Int16ArrayPrototype%': ['Int16Array', 'prototype'],
+	'%Int32ArrayPrototype%': ['Int32Array', 'prototype'],
+	'%JSONParse%': ['JSON', 'parse'],
+	'%JSONStringify%': ['JSON', 'stringify'],
+	'%MapPrototype%': ['Map', 'prototype'],
+	'%NumberPrototype%': ['Number', 'prototype'],
+	'%ObjectPrototype%': ['Object', 'prototype'],
+	'%ObjProto_toString%': ['Object', 'prototype', 'toString'],
+	'%ObjProto_valueOf%': ['Object', 'prototype', 'valueOf'],
+	'%PromisePrototype%': ['Promise', 'prototype'],
+	'%PromiseProto_then%': ['Promise', 'prototype', 'then'],
+	'%Promise_all%': ['Promise', 'all'],
+	'%Promise_reject%': ['Promise', 'reject'],
+	'%Promise_resolve%': ['Promise', 'resolve'],
+	'%RangeErrorPrototype%': ['RangeError', 'prototype'],
+	'%ReferenceErrorPrototype%': ['ReferenceError', 'prototype'],
+	'%RegExpPrototype%': ['RegExp', 'prototype'],
+	'%SetPrototype%': ['Set', 'prototype'],
+	'%SharedArrayBufferPrototype%': ['SharedArrayBuffer', 'prototype'],
+	'%StringPrototype%': ['String', 'prototype'],
+	'%SymbolPrototype%': ['Symbol', 'prototype'],
+	'%SyntaxErrorPrototype%': ['SyntaxError', 'prototype'],
+	'%TypedArrayPrototype%': ['TypedArray', 'prototype'],
+	'%TypeErrorPrototype%': ['TypeError', 'prototype'],
+	'%Uint8ArrayPrototype%': ['Uint8Array', 'prototype'],
+	'%Uint8ClampedArrayPrototype%': ['Uint8ClampedArray', 'prototype'],
+	'%Uint16ArrayPrototype%': ['Uint16Array', 'prototype'],
+	'%Uint32ArrayPrototype%': ['Uint32Array', 'prototype'],
+	'%URIErrorPrototype%': ['URIError', 'prototype'],
+	'%WeakMapPrototype%': ['WeakMap', 'prototype'],
+	'%WeakSetPrototype%': ['WeakSet', 'prototype']
+};
+
+var bind = __nccwpck_require__(37564);
+var hasOwn = __nccwpck_require__(54076);
+var $concat = bind.call($call, Array.prototype.concat);
+var $spliceApply = bind.call($apply, Array.prototype.splice);
+var $replace = bind.call($call, String.prototype.replace);
+var $strSlice = bind.call($call, String.prototype.slice);
+var $exec = bind.call($call, RegExp.prototype.exec);
+
+/* adapted from https://github.com/lodash/lodash/blob/4.17.15/dist/lodash.js#L6735-L6744 */
+var rePropName = /[^%.[\]]+|\[(?:(-?\d+(?:\.\d+)?)|(["'])((?:(?!\2)[^\\]|\\.)*?)\2)\]|(?=(?:\.|\[\])(?:\.|\[\]|%$))/g;
+var reEscapeChar = /\\(\\)?/g; /** Used to match backslashes in property paths. */
+var stringToPath = function stringToPath(string) {
+	var first = $strSlice(string, 0, 1);
+	var last = $strSlice(string, -1);
+	if (first === '%' && last !== '%') {
+		throw new $SyntaxError('invalid intrinsic syntax, expected closing `%`');
+	} else if (last === '%' && first !== '%') {
+		throw new $SyntaxError('invalid intrinsic syntax, expected opening `%`');
+	}
+	var result = [];
+	$replace(string, rePropName, function (match, number, quote, subString) {
+		result[result.length] = quote ? $replace(subString, reEscapeChar, '$1') : number || match;
+	});
+	return result;
+};
+/* end adaptation */
+
+var getBaseIntrinsic = function getBaseIntrinsic(name, allowMissing) {
+	var intrinsicName = name;
+	var alias;
+	if (hasOwn(LEGACY_ALIASES, intrinsicName)) {
+		alias = LEGACY_ALIASES[intrinsicName];
+		intrinsicName = '%' + alias[0] + '%';
+	}
+
+	if (hasOwn(INTRINSICS, intrinsicName)) {
+		var value = INTRINSICS[intrinsicName];
+		if (value === needsEval) {
+			value = doEval(intrinsicName);
+		}
+		if (typeof value === 'undefined' && !allowMissing) {
+			throw new $TypeError('intrinsic ' + name + ' exists, but is not available. Please file an issue!');
+		}
+
+		return {
+			alias: alias,
+			name: intrinsicName,
+			value: value
+		};
+	}
+
+	throw new $SyntaxError('intrinsic ' + name + ' does not exist!');
+};
+
+module.exports = function GetIntrinsic(name, allowMissing) {
+	if (typeof name !== 'string' || name.length === 0) {
+		throw new $TypeError('intrinsic name must be a non-empty string');
+	}
+	if (arguments.length > 1 && typeof allowMissing !== 'boolean') {
+		throw new $TypeError('"allowMissing" argument must be a boolean');
+	}
+
+	if ($exec(/^%?[^%]*%?$/, name) === null) {
+		throw new $SyntaxError('`%` may not be present anywhere but at the beginning and end of the intrinsic name');
+	}
+	var parts = stringToPath(name);
+	var intrinsicBaseName = parts.length > 0 ? parts[0] : '';
+
+	var intrinsic = getBaseIntrinsic('%' + intrinsicBaseName + '%', allowMissing);
+	var intrinsicRealName = intrinsic.name;
+	var value = intrinsic.value;
+	var skipFurtherCaching = false;
+
+	var alias = intrinsic.alias;
+	if (alias) {
+		intrinsicBaseName = alias[0];
+		$spliceApply(parts, $concat([0, 1], alias));
+	}
+
+	for (var i = 1, isOwn = true; i < parts.length; i += 1) {
+		var part = parts[i];
+		var first = $strSlice(part, 0, 1);
+		var last = $strSlice(part, -1);
+		if (
+			(
+				(first === '"' || first === "'" || first === '`')
+				|| (last === '"' || last === "'" || last === '`')
+			)
+			&& first !== last
+		) {
+			throw new $SyntaxError('property names with quotes must have matching quotes');
+		}
+		if (part === 'constructor' || !isOwn) {
+			skipFurtherCaching = true;
+		}
+
+		intrinsicBaseName += '.' + part;
+		intrinsicRealName = '%' + intrinsicBaseName + '%';
+
+		if (hasOwn(INTRINSICS, intrinsicRealName)) {
+			value = INTRINSICS[intrinsicRealName];
+		} else if (value != null) {
+			if (!(part in value)) {
+				if (!allowMissing) {
+					throw new $TypeError('base intrinsic for ' + name + ' exists, but the property is not available.');
+				}
+				return void undefined;
+			}
+			if ($gOPD && (i + 1) >= parts.length) {
+				var desc = $gOPD(value, part);
+				isOwn = !!desc;
+
+				// By convention, when a data property is converted to an accessor
+				// property to emulate a data property that does not suffer from
+				// the override mistake, that accessor's getter is marked with
+				// an `originalValue` property. Here, when we detect this, we
+				// uphold the illusion by pretending to see that original data
+				// property, i.e., returning the value rather than the getter
+				// itself.
+				if (isOwn && 'get' in desc && !('originalValue' in desc.get)) {
+					value = desc.get;
+				} else {
+					value = value[part];
+				}
+			} else {
+				isOwn = hasOwn(value, part);
+				value = value[part];
+			}
+
+			if (isOwn && !skipFurtherCaching) {
+				INTRINSICS[intrinsicRealName] = value;
+			}
+		}
+	}
+	return value;
+};
+
+
+/***/ }),
+
+/***/ 91311:
+/***/ ((module, __unused_webpack_exports, __nccwpck_require__) => {
+
+"use strict";
+
+
+var $Object = __nccwpck_require__(95399);
+
+/** @type {import('./Object.getPrototypeOf')} */
+module.exports = $Object.getPrototypeOf || null;
+
+
+/***/ }),
+
+/***/ 48681:
+/***/ ((module) => {
+
+"use strict";
+
+
+/** @type {import('./Reflect.getPrototypeOf')} */
+module.exports = (typeof Reflect !== 'undefined' && Reflect.getPrototypeOf) || null;
+
+
+/***/ }),
+
+/***/ 81967:
+/***/ ((module, __unused_webpack_exports, __nccwpck_require__) => {
+
+"use strict";
+
+
+var reflectGetProto = __nccwpck_require__(48681);
+var originalGetProto = __nccwpck_require__(91311);
+
+var getDunderProto = __nccwpck_require__(26669);
+
+/** @type {import('.')} */
+module.exports = reflectGetProto
+	? function getProto(O) {
+		// @ts-expect-error TS can't narrow inside a closure, for some reason
+		return reflectGetProto(O);
+	}
+	: originalGetProto
+		? function getProto(O) {
+			if (!O || (typeof O !== 'object' && typeof O !== 'function')) {
+				throw new TypeError('getProto: not an object');
+			}
+			// @ts-expect-error TS can't narrow inside a closure, for some reason
+			return originalGetProto(O);
+		}
+		: getDunderProto
+			? function getProto(O) {
+				// @ts-expect-error TS can't narrow inside a closure, for some reason
+				return getDunderProto(O);
+			}
+			: null;
+
+
+/***/ }),
+
+/***/ 1174:
+/***/ ((module) => {
+
+"use strict";
+
+
+/** @type {import('./gOPD')} */
+module.exports = Object.getOwnPropertyDescriptor;
+
+
+/***/ }),
+
+/***/ 33170:
+/***/ ((module, __unused_webpack_exports, __nccwpck_require__) => {
+
+"use strict";
+
+
+/** @type {import('.')} */
+var $gOPD = __nccwpck_require__(1174);
+
+if ($gOPD) {
+	try {
+		$gOPD([], 'length');
+	} catch (e) {
+		// IE 8 has a broken gOPD
+		$gOPD = null;
+	}
+}
+
+module.exports = $gOPD;
 
 
 /***/ }),
@@ -41961,6 +42855,113 @@ module.exports = (flag, argv = process.argv) => {
 	const terminatorPosition = argv.indexOf('--');
 	return position !== -1 && (terminatorPosition === -1 || position < terminatorPosition);
 };
+
+
+/***/ }),
+
+/***/ 23336:
+/***/ ((module, __unused_webpack_exports, __nccwpck_require__) => {
+
+"use strict";
+
+
+var origSymbol = typeof Symbol !== 'undefined' && Symbol;
+var hasSymbolSham = __nccwpck_require__(61114);
+
+/** @type {import('.')} */
+module.exports = function hasNativeSymbols() {
+	if (typeof origSymbol !== 'function') { return false; }
+	if (typeof Symbol !== 'function') { return false; }
+	if (typeof origSymbol('foo') !== 'symbol') { return false; }
+	if (typeof Symbol('bar') !== 'symbol') { return false; }
+
+	return hasSymbolSham();
+};
+
+
+/***/ }),
+
+/***/ 61114:
+/***/ ((module) => {
+
+"use strict";
+
+
+/** @type {import('./shams')} */
+/* eslint complexity: [2, 18], max-statements: [2, 33] */
+module.exports = function hasSymbols() {
+	if (typeof Symbol !== 'function' || typeof Object.getOwnPropertySymbols !== 'function') { return false; }
+	if (typeof Symbol.iterator === 'symbol') { return true; }
+
+	/** @type {{ [k in symbol]?: unknown }} */
+	var obj = {};
+	var sym = Symbol('test');
+	var symObj = Object(sym);
+	if (typeof sym === 'string') { return false; }
+
+	if (Object.prototype.toString.call(sym) !== '[object Symbol]') { return false; }
+	if (Object.prototype.toString.call(symObj) !== '[object Symbol]') { return false; }
+
+	// temp disabled per https://github.com/ljharb/object.assign/issues/17
+	// if (sym instanceof Symbol) { return false; }
+	// temp disabled per https://github.com/WebReflection/get-own-property-symbols/issues/4
+	// if (!(symObj instanceof Symbol)) { return false; }
+
+	// if (typeof Symbol.prototype.toString !== 'function') { return false; }
+	// if (String(sym) !== Symbol.prototype.toString.call(sym)) { return false; }
+
+	var symVal = 42;
+	obj[sym] = symVal;
+	for (var _ in obj) { return false; } // eslint-disable-line no-restricted-syntax, no-unreachable-loop
+	if (typeof Object.keys === 'function' && Object.keys(obj).length !== 0) { return false; }
+
+	if (typeof Object.getOwnPropertyNames === 'function' && Object.getOwnPropertyNames(obj).length !== 0) { return false; }
+
+	var syms = Object.getOwnPropertySymbols(obj);
+	if (syms.length !== 1 || syms[0] !== sym) { return false; }
+
+	if (!Object.prototype.propertyIsEnumerable.call(obj, sym)) { return false; }
+
+	if (typeof Object.getOwnPropertyDescriptor === 'function') {
+		// eslint-disable-next-line no-extra-parens
+		var descriptor = /** @type {PropertyDescriptor} */ (Object.getOwnPropertyDescriptor(obj, sym));
+		if (descriptor.value !== symVal || descriptor.enumerable !== true) { return false; }
+	}
+
+	return true;
+};
+
+
+/***/ }),
+
+/***/ 85479:
+/***/ ((module, __unused_webpack_exports, __nccwpck_require__) => {
+
+"use strict";
+
+
+var hasSymbols = __nccwpck_require__(61114);
+
+/** @type {import('.')} */
+module.exports = function hasToStringTagShams() {
+	return hasSymbols() && !!Symbol.toStringTag;
+};
+
+
+/***/ }),
+
+/***/ 54076:
+/***/ ((module, __unused_webpack_exports, __nccwpck_require__) => {
+
+"use strict";
+
+
+var call = Function.prototype.call;
+var $hasOwn = Object.prototype.hasOwnProperty;
+var bind = __nccwpck_require__(37564);
+
+/** @type {import('.')} */
+module.exports = bind.call(call, $hasOwn);
 
 
 /***/ }),
@@ -59568,14 +60569,14 @@ function writeFileSync (file, obj, options = {}) {
   return fs.writeFileSync(file, str, options)
 }
 
-const jsonfile = {
+// NOTE: do not change this export format; required for ESM compat
+// see https://github.com/jprichardson/node-jsonfile/pull/162 for details
+module.exports = {
   readFile,
   readFileSync,
   writeFile,
   writeFileSync
 }
-
-module.exports = jsonfile
 
 
 /***/ }),
@@ -59842,6 +60843,9 @@ module.exports = function(algorithm, key) {
 /***/ 8448:
 /***/ ((module, __unused_webpack_exports, __nccwpck_require__) => {
 
+"use strict";
+
+
 const ANY = Symbol('SemVer ANY')
 // hoisted class for cyclic dependency
 class Comparator {
@@ -59989,6 +60993,9 @@ const Range = __nccwpck_require__(34967)
 
 /***/ 34967:
 /***/ ((module, __unused_webpack_exports, __nccwpck_require__) => {
+
+"use strict";
+
 
 const SPACE_CHARACTERS = /\s+/g
 
@@ -60551,6 +61558,9 @@ const testSet = (set, version, options) => {
 /***/ 65412:
 /***/ ((module, __unused_webpack_exports, __nccwpck_require__) => {
 
+"use strict";
+
+
 const debug = __nccwpck_require__(77384)
 const { MAX_LENGTH, MAX_SAFE_INTEGER } = __nccwpck_require__(95994)
 const { safeRe: re, t } = __nccwpck_require__(55862)
@@ -60563,7 +61573,7 @@ class SemVer {
 
     if (version instanceof SemVer) {
       if (version.loose === !!options.loose &&
-          version.includePrerelease === !!options.includePrerelease) {
+        version.includePrerelease === !!options.includePrerelease) {
         return version
       } else {
         version = version.version
@@ -60729,6 +61739,19 @@ class SemVer {
   // preminor will bump the version up to the next minor release, and immediately
   // down to pre-release. premajor and prepatch work the same way.
   inc (release, identifier, identifierBase) {
+    if (release.startsWith('pre')) {
+      if (!identifier && identifierBase === false) {
+        throw new Error('invalid increment argument: identifier is empty')
+      }
+      // Avoid an invalid semver results
+      if (identifier) {
+        const match = `-${identifier}`.match(this.options.loose ? re[t.PRERELEASELOOSE] : re[t.PRERELEASE])
+        if (!match || match[1] !== identifier) {
+          throw new Error(`invalid identifier: ${identifier}`)
+        }
+      }
+    }
+
     switch (release) {
       case 'premajor':
         this.prerelease.length = 0
@@ -60758,6 +61781,12 @@ class SemVer {
           this.inc('patch', identifier, identifierBase)
         }
         this.inc('pre', identifier, identifierBase)
+        break
+      case 'release':
+        if (this.prerelease.length === 0) {
+          throw new Error(`version ${this.raw} is not a prerelease`)
+        }
+        this.prerelease.length = 0
         break
 
       case 'major':
@@ -60801,10 +61830,6 @@ class SemVer {
       // 1.0.0 'pre' would become 1.0.0-0 which is the wrong direction.
       case 'pre': {
         const base = Number(identifierBase) ? 1 : 0
-
-        if (!identifier && identifierBase === false) {
-          throw new Error('invalid increment argument: identifier is empty')
-        }
 
         if (this.prerelease.length === 0) {
           this.prerelease = [base]
@@ -60860,6 +61885,9 @@ module.exports = SemVer
 /***/ 3830:
 /***/ ((module, __unused_webpack_exports, __nccwpck_require__) => {
 
+"use strict";
+
+
 const parse = __nccwpck_require__(86928)
 const clean = (version, options) => {
   const s = parse(version.trim().replace(/^[=v]+/, ''), options)
@@ -60872,6 +61900,9 @@ module.exports = clean
 
 /***/ 84255:
 /***/ ((module, __unused_webpack_exports, __nccwpck_require__) => {
+
+"use strict";
+
 
 const eq = __nccwpck_require__(86081)
 const neq = __nccwpck_require__(14527)
@@ -60931,6 +61962,9 @@ module.exports = cmp
 
 /***/ 20746:
 /***/ ((module, __unused_webpack_exports, __nccwpck_require__) => {
+
+"use strict";
+
 
 const SemVer = __nccwpck_require__(65412)
 const parse = __nccwpck_require__(86928)
@@ -60999,6 +62033,9 @@ module.exports = coerce
 /***/ 95581:
 /***/ ((module, __unused_webpack_exports, __nccwpck_require__) => {
 
+"use strict";
+
+
 const SemVer = __nccwpck_require__(65412)
 const compareBuild = (a, b, loose) => {
   const versionA = new SemVer(a, loose)
@@ -61013,6 +62050,9 @@ module.exports = compareBuild
 /***/ 31651:
 /***/ ((module, __unused_webpack_exports, __nccwpck_require__) => {
 
+"use strict";
+
+
 const compare = __nccwpck_require__(56176)
 const compareLoose = (a, b) => compare(a, b, true)
 module.exports = compareLoose
@@ -61022,6 +62062,9 @@ module.exports = compareLoose
 
 /***/ 56176:
 /***/ ((module, __unused_webpack_exports, __nccwpck_require__) => {
+
+"use strict";
+
 
 const SemVer = __nccwpck_require__(65412)
 const compare = (a, b, loose) =>
@@ -61034,6 +62077,9 @@ module.exports = compare
 
 /***/ 38632:
 /***/ ((module, __unused_webpack_exports, __nccwpck_require__) => {
+
+"use strict";
+
 
 const parse = __nccwpck_require__(86928)
 
@@ -61064,20 +62110,13 @@ const diff = (version1, version2) => {
       return 'major'
     }
 
-    // Otherwise it can be determined by checking the high version
-
-    if (highVersion.patch) {
-      // anything higher than a patch bump would result in the wrong version
+    // If the main part has no difference
+    if (lowVersion.compareMain(highVersion) === 0) {
+      if (lowVersion.minor && !lowVersion.patch) {
+        return 'minor'
+      }
       return 'patch'
     }
-
-    if (highVersion.minor) {
-      // anything higher than a minor bump would result in the wrong version
-      return 'minor'
-    }
-
-    // bumping major/minor/patch all have same result
-    return 'major'
   }
 
   // add the `pre` prefix if we are going to a prerelease version
@@ -61107,6 +62146,9 @@ module.exports = diff
 /***/ 86081:
 /***/ ((module, __unused_webpack_exports, __nccwpck_require__) => {
 
+"use strict";
+
+
 const compare = __nccwpck_require__(56176)
 const eq = (a, b, loose) => compare(a, b, loose) === 0
 module.exports = eq
@@ -61116,6 +62158,9 @@ module.exports = eq
 
 /***/ 48460:
 /***/ ((module, __unused_webpack_exports, __nccwpck_require__) => {
+
+"use strict";
+
 
 const compare = __nccwpck_require__(56176)
 const gt = (a, b, loose) => compare(a, b, loose) > 0
@@ -61127,6 +62172,9 @@ module.exports = gt
 /***/ 43577:
 /***/ ((module, __unused_webpack_exports, __nccwpck_require__) => {
 
+"use strict";
+
+
 const compare = __nccwpck_require__(56176)
 const gte = (a, b, loose) => compare(a, b, loose) >= 0
 module.exports = gte
@@ -61136,6 +62184,9 @@ module.exports = gte
 
 /***/ 49343:
 /***/ ((module, __unused_webpack_exports, __nccwpck_require__) => {
+
+"use strict";
+
 
 const SemVer = __nccwpck_require__(65412)
 
@@ -61163,6 +62214,9 @@ module.exports = inc
 /***/ 78467:
 /***/ ((module, __unused_webpack_exports, __nccwpck_require__) => {
 
+"use strict";
+
+
 const compare = __nccwpck_require__(56176)
 const lt = (a, b, loose) => compare(a, b, loose) < 0
 module.exports = lt
@@ -61172,6 +62226,9 @@ module.exports = lt
 
 /***/ 640:
 /***/ ((module, __unused_webpack_exports, __nccwpck_require__) => {
+
+"use strict";
+
 
 const compare = __nccwpck_require__(56176)
 const lte = (a, b, loose) => compare(a, b, loose) <= 0
@@ -61183,6 +62240,9 @@ module.exports = lte
 /***/ 72186:
 /***/ ((module, __unused_webpack_exports, __nccwpck_require__) => {
 
+"use strict";
+
+
 const SemVer = __nccwpck_require__(65412)
 const major = (a, loose) => new SemVer(a, loose).major
 module.exports = major
@@ -61192,6 +62252,9 @@ module.exports = major
 
 /***/ 73566:
 /***/ ((module, __unused_webpack_exports, __nccwpck_require__) => {
+
+"use strict";
+
 
 const SemVer = __nccwpck_require__(65412)
 const minor = (a, loose) => new SemVer(a, loose).minor
@@ -61203,6 +62266,9 @@ module.exports = minor
 /***/ 14527:
 /***/ ((module, __unused_webpack_exports, __nccwpck_require__) => {
 
+"use strict";
+
+
 const compare = __nccwpck_require__(56176)
 const neq = (a, b, loose) => compare(a, b, loose) !== 0
 module.exports = neq
@@ -61212,6 +62278,9 @@ module.exports = neq
 
 /***/ 86928:
 /***/ ((module, __unused_webpack_exports, __nccwpck_require__) => {
+
+"use strict";
+
 
 const SemVer = __nccwpck_require__(65412)
 const parse = (version, options, throwErrors = false) => {
@@ -61236,6 +62305,9 @@ module.exports = parse
 /***/ 93021:
 /***/ ((module, __unused_webpack_exports, __nccwpck_require__) => {
 
+"use strict";
+
+
 const SemVer = __nccwpck_require__(65412)
 const patch = (a, loose) => new SemVer(a, loose).patch
 module.exports = patch
@@ -61245,6 +62317,9 @@ module.exports = patch
 
 /***/ 36577:
 /***/ ((module, __unused_webpack_exports, __nccwpck_require__) => {
+
+"use strict";
+
 
 const parse = __nccwpck_require__(86928)
 const prerelease = (version, options) => {
@@ -61259,6 +62334,9 @@ module.exports = prerelease
 /***/ 18594:
 /***/ ((module, __unused_webpack_exports, __nccwpck_require__) => {
 
+"use strict";
+
+
 const compare = __nccwpck_require__(56176)
 const rcompare = (a, b, loose) => compare(b, a, loose)
 module.exports = rcompare
@@ -61269,6 +62347,9 @@ module.exports = rcompare
 /***/ 80565:
 /***/ ((module, __unused_webpack_exports, __nccwpck_require__) => {
 
+"use strict";
+
+
 const compareBuild = __nccwpck_require__(95581)
 const rsort = (list, loose) => list.sort((a, b) => compareBuild(b, a, loose))
 module.exports = rsort
@@ -61278,6 +62359,9 @@ module.exports = rsort
 
 /***/ 16278:
 /***/ ((module, __unused_webpack_exports, __nccwpck_require__) => {
+
+"use strict";
+
 
 const Range = __nccwpck_require__(34967)
 const satisfies = (version, range, options) => {
@@ -61296,6 +62380,9 @@ module.exports = satisfies
 /***/ 38215:
 /***/ ((module, __unused_webpack_exports, __nccwpck_require__) => {
 
+"use strict";
+
+
 const compareBuild = __nccwpck_require__(95581)
 const sort = (list, loose) => list.sort((a, b) => compareBuild(a, b, loose))
 module.exports = sort
@@ -61305,6 +62392,9 @@ module.exports = sort
 
 /***/ 6569:
 /***/ ((module, __unused_webpack_exports, __nccwpck_require__) => {
+
+"use strict";
+
 
 const parse = __nccwpck_require__(86928)
 const valid = (version, options) => {
@@ -61318,6 +62408,9 @@ module.exports = valid
 
 /***/ 49749:
 /***/ ((module, __unused_webpack_exports, __nccwpck_require__) => {
+
+"use strict";
+
 
 // just pre-load all the stuff that index.js lazily exports
 const internalRe = __nccwpck_require__(55862)
@@ -61415,6 +62508,9 @@ module.exports = {
 /***/ 95994:
 /***/ ((module) => {
 
+"use strict";
+
+
 // Note: this is the semver.org version of the spec that it implements
 // Not necessarily the package version of this code.
 const SEMVER_SPEC_VERSION = '2.0.0'
@@ -61457,6 +62553,9 @@ module.exports = {
 /***/ 77384:
 /***/ ((module) => {
 
+"use strict";
+
+
 const debug = (
   typeof process === 'object' &&
   process.env &&
@@ -61472,6 +62571,9 @@ module.exports = debug
 
 /***/ 73523:
 /***/ ((module) => {
+
+"use strict";
+
 
 const numeric = /^[0-9]+$/
 const compareIdentifiers = (a, b) => {
@@ -61502,6 +62604,9 @@ module.exports = {
 
 /***/ 81290:
 /***/ ((module) => {
+
+"use strict";
+
 
 class LRUCache {
   constructor () {
@@ -61550,6 +62655,9 @@ module.exports = LRUCache
 /***/ 16555:
 /***/ ((module) => {
 
+"use strict";
+
+
 // parse out just the options we care about
 const looseOption = Object.freeze({ loose: true })
 const emptyOpts = Object.freeze({ })
@@ -61572,6 +62680,9 @@ module.exports = parseOptions
 /***/ 55862:
 /***/ ((module, exports, __nccwpck_require__) => {
 
+"use strict";
+
+
 const {
   MAX_SAFE_COMPONENT_LENGTH,
   MAX_SAFE_BUILD_LENGTH,
@@ -61584,6 +62695,7 @@ exports = module.exports = {}
 const re = exports.re = []
 const safeRe = exports.safeRe = []
 const src = exports.src = []
+const safeSrc = exports.safeSrc = []
 const t = exports.t = {}
 let R = 0
 
@@ -61616,6 +62728,7 @@ const createToken = (name, value, isGlobal) => {
   debug(name, index, value)
   t[name] = index
   src[index] = value
+  safeSrc[index] = safe
   re[index] = new RegExp(value, isGlobal ? 'g' : undefined)
   safeRe[index] = new RegExp(safe, isGlobal ? 'g' : undefined)
 }
@@ -61648,12 +62761,14 @@ createToken('MAINVERSIONLOOSE', `(${src[t.NUMERICIDENTIFIERLOOSE]})\\.` +
 
 // ## Pre-release Version Identifier
 // A numeric identifier, or a non-numeric identifier.
+// Non-numberic identifiers include numberic identifiers but can be longer.
+// Therefore non-numberic identifiers must go first.
 
-createToken('PRERELEASEIDENTIFIER', `(?:${src[t.NUMERICIDENTIFIER]
-}|${src[t.NONNUMERICIDENTIFIER]})`)
+createToken('PRERELEASEIDENTIFIER', `(?:${src[t.NONNUMERICIDENTIFIER]
+}|${src[t.NUMERICIDENTIFIER]})`)
 
-createToken('PRERELEASEIDENTIFIERLOOSE', `(?:${src[t.NUMERICIDENTIFIERLOOSE]
-}|${src[t.NONNUMERICIDENTIFIER]})`)
+createToken('PRERELEASEIDENTIFIERLOOSE', `(?:${src[t.NONNUMERICIDENTIFIER]
+}|${src[t.NUMERICIDENTIFIERLOOSE]})`)
 
 // ## Pre-release Version
 // Hyphen, followed by one or more dot-separated pre-release version
@@ -61796,6 +62911,9 @@ createToken('GTE0PRE', '^\\s*>=\\s*0\\.0\\.0-0\\s*$')
 /***/ 99331:
 /***/ ((module, __unused_webpack_exports, __nccwpck_require__) => {
 
+"use strict";
+
+
 // Determine if version is greater than all the versions possible in the range.
 const outside = __nccwpck_require__(7203)
 const gtr = (version, range, options) => outside(version, range, '>', options)
@@ -61806,6 +62924,9 @@ module.exports = gtr
 
 /***/ 71868:
 /***/ ((module, __unused_webpack_exports, __nccwpck_require__) => {
+
+"use strict";
+
 
 const Range = __nccwpck_require__(34967)
 const intersects = (r1, r2, options) => {
@@ -61821,6 +62942,9 @@ module.exports = intersects
 /***/ 47022:
 /***/ ((module, __unused_webpack_exports, __nccwpck_require__) => {
 
+"use strict";
+
+
 const outside = __nccwpck_require__(7203)
 // Determine if version is less than all the versions possible in the range
 const ltr = (version, range, options) => outside(version, range, '<', options)
@@ -61831,6 +62955,9 @@ module.exports = ltr
 
 /***/ 48380:
 /***/ ((module, __unused_webpack_exports, __nccwpck_require__) => {
+
+"use strict";
+
 
 const SemVer = __nccwpck_require__(65412)
 const Range = __nccwpck_require__(34967)
@@ -61864,6 +62991,9 @@ module.exports = maxSatisfying
 /***/ 71742:
 /***/ ((module, __unused_webpack_exports, __nccwpck_require__) => {
 
+"use strict";
+
+
 const SemVer = __nccwpck_require__(65412)
 const Range = __nccwpck_require__(34967)
 const minSatisfying = (versions, range, options) => {
@@ -61894,6 +63024,9 @@ module.exports = minSatisfying
 
 /***/ 20125:
 /***/ ((module, __unused_webpack_exports, __nccwpck_require__) => {
+
+"use strict";
+
 
 const SemVer = __nccwpck_require__(65412)
 const Range = __nccwpck_require__(34967)
@@ -61962,6 +63095,9 @@ module.exports = minVersion
 
 /***/ 7203:
 /***/ ((module, __unused_webpack_exports, __nccwpck_require__) => {
+
+"use strict";
+
 
 const SemVer = __nccwpck_require__(65412)
 const Comparator = __nccwpck_require__(8448)
@@ -62050,6 +63186,9 @@ module.exports = outside
 /***/ 73629:
 /***/ ((module, __unused_webpack_exports, __nccwpck_require__) => {
 
+"use strict";
+
+
 // given a set of versions and a range, create a "simplified" range
 // that includes the same versions that the original range does
 // If the original range is shorter than the simplified one, return that.
@@ -62103,6 +63242,9 @@ module.exports = (versions, range, options) => {
 
 /***/ 33384:
 /***/ ((module, __unused_webpack_exports, __nccwpck_require__) => {
+
+"use strict";
+
 
 const Range = __nccwpck_require__(34967)
 const Comparator = __nccwpck_require__(8448)
@@ -62358,6 +63500,9 @@ module.exports = subset
 /***/ 66959:
 /***/ ((module, __unused_webpack_exports, __nccwpck_require__) => {
 
+"use strict";
+
+
 const Range = __nccwpck_require__(34967)
 
 // Mostly just for testing and legacy API reasons
@@ -62372,6 +63517,9 @@ module.exports = toComparators
 
 /***/ 1634:
 /***/ ((module, __unused_webpack_exports, __nccwpck_require__) => {
+
+"use strict";
+
 
 const Range = __nccwpck_require__(34967)
 const validRange = (range, options) => {
@@ -62921,7 +64069,6 @@ module.exports = function (jwtString, secretOrPublicKey, options, callback) {
 /***/ 38622:
 /***/ ((module, __unused_webpack_exports, __nccwpck_require__) => {
 
-var bufferEqual = __nccwpck_require__(39732);
 var Buffer = (__nccwpck_require__(93058).Buffer);
 var crypto = __nccwpck_require__(76982);
 var formatEcdsa = __nccwpck_require__(325);
@@ -63058,10 +64205,25 @@ function createHmacSigner(bits) {
   }
 }
 
+var bufferEqual;
+var timingSafeEqual = 'timingSafeEqual' in crypto ? function timingSafeEqual(a, b) {
+  if (a.byteLength !== b.byteLength) {
+    return false;
+  }
+
+  return crypto.timingSafeEqual(a, b)
+} : function timingSafeEqual(a, b) {
+  if (!bufferEqual) {
+    bufferEqual = __nccwpck_require__(39732);
+  }
+
+  return bufferEqual(a, b)
+}
+
 function createHmacVerifier(bits) {
   return function verify(thing, signature, secret) {
     var computedSig = createHmacSigner(bits)(thing, secret);
-    return bufferEqual(Buffer.from(signature), Buffer.from(computedSig));
+    return timingSafeEqual(Buffer.from(signature), Buffer.from(computedSig));
   }
 }
 
@@ -68568,6 +69730,111 @@ const forEachStep = (self, fn, node, thisp) => {
 }
 
 module.exports = LRUCache
+
+
+/***/ }),
+
+/***/ 55641:
+/***/ ((module) => {
+
+"use strict";
+
+
+/** @type {import('./abs')} */
+module.exports = Math.abs;
+
+
+/***/ }),
+
+/***/ 96171:
+/***/ ((module) => {
+
+"use strict";
+
+
+/** @type {import('./floor')} */
+module.exports = Math.floor;
+
+
+/***/ }),
+
+/***/ 77044:
+/***/ ((module) => {
+
+"use strict";
+
+
+/** @type {import('./isNaN')} */
+module.exports = Number.isNaN || function isNaN(a) {
+	return a !== a;
+};
+
+
+/***/ }),
+
+/***/ 57147:
+/***/ ((module) => {
+
+"use strict";
+
+
+/** @type {import('./max')} */
+module.exports = Math.max;
+
+
+/***/ }),
+
+/***/ 41017:
+/***/ ((module) => {
+
+"use strict";
+
+
+/** @type {import('./min')} */
+module.exports = Math.min;
+
+
+/***/ }),
+
+/***/ 56947:
+/***/ ((module) => {
+
+"use strict";
+
+
+/** @type {import('./pow')} */
+module.exports = Math.pow;
+
+
+/***/ }),
+
+/***/ 42621:
+/***/ ((module) => {
+
+"use strict";
+
+
+/** @type {import('./round')} */
+module.exports = Math.round;
+
+
+/***/ }),
+
+/***/ 30156:
+/***/ ((module, __unused_webpack_exports, __nccwpck_require__) => {
+
+"use strict";
+
+
+var $isNaN = __nccwpck_require__(77044);
+
+/** @type {import('./sign')} */
+module.exports = function sign(number) {
+	if ($isNaN(number) || number === 0) {
+		return number;
+	}
+	return number < 0 ? -1 : +1;
+};
 
 
 /***/ }),
@@ -83244,7 +84511,7 @@ module.exports = {
 
 
 const { parseSetCookie } = __nccwpck_require__(8915)
-const { stringify, getHeadersList } = __nccwpck_require__(3834)
+const { stringify } = __nccwpck_require__(3834)
 const { webidl } = __nccwpck_require__(74222)
 const { Headers } = __nccwpck_require__(26349)
 
@@ -83320,14 +84587,13 @@ function getSetCookies (headers) {
 
   webidl.brandCheck(headers, Headers, { strict: false })
 
-  const cookies = getHeadersList(headers).cookies
+  const cookies = headers.getSetCookie()
 
   if (!cookies) {
     return []
   }
 
-  // In older versions of undici, cookies is a list of name:value.
-  return cookies.map((pair) => parseSetCookie(Array.isArray(pair) ? pair[1] : pair))
+  return cookies.map((pair) => parseSetCookie(pair))
 }
 
 /**
@@ -83755,14 +85021,15 @@ module.exports = {
 /***/ }),
 
 /***/ 3834:
-/***/ ((module, __unused_webpack_exports, __nccwpck_require__) => {
+/***/ ((module) => {
 
 "use strict";
 
 
-const assert = __nccwpck_require__(42613)
-const { kHeadersList } = __nccwpck_require__(36443)
-
+/**
+ * @param {string} value
+ * @returns {boolean}
+ */
 function isCTLExcludingHtab (value) {
   if (value.length === 0) {
     return false
@@ -84023,31 +85290,13 @@ function stringify (cookie) {
   return out.join('; ')
 }
 
-let kHeadersListNode
-
-function getHeadersList (headers) {
-  if (headers[kHeadersList]) {
-    return headers[kHeadersList]
-  }
-
-  if (!kHeadersListNode) {
-    kHeadersListNode = Object.getOwnPropertySymbols(headers).find(
-      (symbol) => symbol.description === 'headers list'
-    )
-
-    assert(kHeadersListNode, 'Headers cannot be parsed')
-  }
-
-  const headersList = headers[kHeadersListNode]
-  assert(headersList)
-
-  return headersList
-}
-
 module.exports = {
   isCTLExcludingHtab,
-  stringify,
-  getHeadersList
+  validateCookieName,
+  validateCookiePath,
+  validateCookieValue,
+  toIMFDate,
+  stringify
 }
 
 
@@ -88051,6 +89300,7 @@ const {
   isValidHeaderName,
   isValidHeaderValue
 } = __nccwpck_require__(15523)
+const util = __nccwpck_require__(39023)
 const { webidl } = __nccwpck_require__(74222)
 const assert = __nccwpck_require__(42613)
 
@@ -88604,6 +89854,9 @@ Object.defineProperties(Headers.prototype, {
   [Symbol.toStringTag]: {
     value: 'Headers',
     configurable: true
+  },
+  [util.inspect.custom]: {
+    enumerable: false
   }
 })
 
@@ -97780,6 +99033,20 @@ class Pool extends PoolBase {
       ? { ...options.interceptors }
       : undefined
     this[kFactory] = factory
+
+    this.on('connectionError', (origin, targets, error) => {
+      // If a connection error occurs, we remove the client from the pool,
+      // and emit a connectionError event. They will not be re-used.
+      // Fixes https://github.com/nodejs/undici/issues/3895
+      for (const target of targets) {
+        // Do not use kRemoveClient here, as it will close the client,
+        // but the client cannot be closed in this state.
+        const idx = this[kClients].indexOf(target)
+        if (idx !== -1) {
+          this[kClients].splice(idx, 1)
+        }
+      }
+    })
   }
 
   [kGetDispatcher] () {
@@ -107442,10 +108709,7 @@ function validate (schema, data) {
  * @param {Array<string>} commands the commands to run
  */
 async function runCLICommand (exec, os, commands) {
-  for (let command of commands) {
-    if (os?.startsWith('ubuntu')) {
-      command = `sudo --preserve-env ${command}`
-    }
+  for (const command of commands) {
     await exec.exec(command)
   }
 }
@@ -107997,7 +109261,7 @@ module.exports = require("zlib");
 // Licensed under the MIT License.
 Object.defineProperty(exports, "__esModule", ({ value: true }));
 exports.DEFAULT_RETRY_POLICY_COUNT = exports.SDK_VERSION = void 0;
-exports.SDK_VERSION = "1.18.2";
+exports.SDK_VERSION = "1.22.0";
 exports.DEFAULT_RETRY_POLICY_COUNT = 3;
 //# sourceMappingURL=constants.js.map
 
@@ -108023,8 +109287,10 @@ const formDataPolicy_js_1 = __nccwpck_require__(75497);
 const core_util_1 = __nccwpck_require__(87779);
 const proxyPolicy_js_1 = __nccwpck_require__(32815);
 const setClientRequestIdPolicy_js_1 = __nccwpck_require__(95686);
+const agentPolicy_js_1 = __nccwpck_require__(18554);
 const tlsPolicy_js_1 = __nccwpck_require__(75798);
 const tracingPolicy_js_1 = __nccwpck_require__(93237);
+const wrapAbortSignalLikePolicy_js_1 = __nccwpck_require__(37466);
 /**
  * Create a new pipeline with a default set of customizable policies.
  * @param options - Options to configure a custom pipeline.
@@ -108033,12 +109299,16 @@ function createPipelineFromOptions(options) {
     var _a;
     const pipeline = (0, pipeline_js_1.createEmptyPipeline)();
     if (core_util_1.isNodeLike) {
+        if (options.agent) {
+            pipeline.addPolicy((0, agentPolicy_js_1.agentPolicy)(options.agent));
+        }
         if (options.tlsOptions) {
             pipeline.addPolicy((0, tlsPolicy_js_1.tlsPolicy)(options.tlsOptions));
         }
         pipeline.addPolicy((0, proxyPolicy_js_1.proxyPolicy)(options.proxyOptions));
         pipeline.addPolicy((0, decompressResponsePolicy_js_1.decompressResponsePolicy)());
     }
+    pipeline.addPolicy((0, wrapAbortSignalLikePolicy_js_1.wrapAbortSignalLikePolicy)());
     pipeline.addPolicy((0, formDataPolicy_js_1.formDataPolicy)(), { beforePolicies: [multipartPolicy_js_1.multipartPolicyName] });
     pipeline.addPolicy((0, userAgentPolicy_js_1.userAgentPolicy)(options.userAgentOptions));
     pipeline.addPolicy((0, setClientRequestIdPolicy_js_1.setClientRequestIdPolicy)((_a = options.telemetryOptions) === null || _a === void 0 ? void 0 : _a.clientRequestIdHeaderName));
@@ -108071,19 +109341,37 @@ function createPipelineFromOptions(options) {
 // Licensed under the MIT License.
 Object.defineProperty(exports, "__esModule", ({ value: true }));
 exports.createDefaultHttpClient = createDefaultHttpClient;
-const nodeHttpClient_js_1 = __nccwpck_require__(10195);
+const ts_http_runtime_1 = __nccwpck_require__(41958);
+const wrapAbortSignal_js_1 = __nccwpck_require__(91297);
 /**
  * Create the correct HttpClient for the current environment.
  */
 function createDefaultHttpClient() {
-    return (0, nodeHttpClient_js_1.createNodeHttpClient)();
+    const client = (0, ts_http_runtime_1.createDefaultHttpClient)();
+    return {
+        async sendRequest(request) {
+            // we wrap any AbortSignalLike here since the TypeSpec runtime expects a native AbortSignal.
+            // 99% of the time, this should be a no-op since a native AbortSignal is passed in.
+            const { abortSignal, cleanup } = request.abortSignal
+                ? (0, wrapAbortSignal_js_1.wrapAbortSignalLike)(request.abortSignal)
+                : {};
+            try {
+                // eslint-disable-next-line no-param-reassign
+                request.abortSignal = abortSignal;
+                return await client.sendRequest(request);
+            }
+            finally {
+                cleanup === null || cleanup === void 0 ? void 0 : cleanup();
+            }
+        },
+    };
 }
 //# sourceMappingURL=defaultHttpClient.js.map
 
 /***/ }),
 
 /***/ 192:
-/***/ ((__unused_webpack_module, exports) => {
+/***/ ((__unused_webpack_module, exports, __nccwpck_require__) => {
 
 "use strict";
 
@@ -108091,91 +109379,13 @@ function createDefaultHttpClient() {
 // Licensed under the MIT License.
 Object.defineProperty(exports, "__esModule", ({ value: true }));
 exports.createHttpHeaders = createHttpHeaders;
-function normalizeName(name) {
-    return name.toLowerCase();
-}
-function* headerIterator(map) {
-    for (const entry of map.values()) {
-        yield [entry.name, entry.value];
-    }
-}
-class HttpHeadersImpl {
-    constructor(rawHeaders) {
-        this._headersMap = new Map();
-        if (rawHeaders) {
-            for (const headerName of Object.keys(rawHeaders)) {
-                this.set(headerName, rawHeaders[headerName]);
-            }
-        }
-    }
-    /**
-     * Set a header in this collection with the provided name and value. The name is
-     * case-insensitive.
-     * @param name - The name of the header to set. This value is case-insensitive.
-     * @param value - The value of the header to set.
-     */
-    set(name, value) {
-        this._headersMap.set(normalizeName(name), { name, value: String(value).trim() });
-    }
-    /**
-     * Get the header value for the provided header name, or undefined if no header exists in this
-     * collection with the provided name.
-     * @param name - The name of the header. This value is case-insensitive.
-     */
-    get(name) {
-        var _a;
-        return (_a = this._headersMap.get(normalizeName(name))) === null || _a === void 0 ? void 0 : _a.value;
-    }
-    /**
-     * Get whether or not this header collection contains a header entry for the provided header name.
-     * @param name - The name of the header to set. This value is case-insensitive.
-     */
-    has(name) {
-        return this._headersMap.has(normalizeName(name));
-    }
-    /**
-     * Remove the header with the provided headerName.
-     * @param name - The name of the header to remove.
-     */
-    delete(name) {
-        this._headersMap.delete(normalizeName(name));
-    }
-    /**
-     * Get the JSON object representation of this HTTP header collection.
-     */
-    toJSON(options = {}) {
-        const result = {};
-        if (options.preserveCase) {
-            for (const entry of this._headersMap.values()) {
-                result[entry.name] = entry.value;
-            }
-        }
-        else {
-            for (const [normalizedName, entry] of this._headersMap) {
-                result[normalizedName] = entry.value;
-            }
-        }
-        return result;
-    }
-    /**
-     * Get the string representation of this HTTP header collection.
-     */
-    toString() {
-        return JSON.stringify(this.toJSON({ preserveCase: true }));
-    }
-    /**
-     * Iterate over tuples of header [name, value] pairs.
-     */
-    [Symbol.iterator]() {
-        return headerIterator(this._headersMap);
-    }
-}
+const ts_http_runtime_1 = __nccwpck_require__(41958);
 /**
  * Creates an object that satisfies the `HttpHeaders` interface.
  * @param rawHeaders - A simple object representing initial headers
  */
 function createHttpHeaders(rawHeaders) {
-    return new HttpHeadersImpl(rawHeaders);
+    return (0, ts_http_runtime_1.createHttpHeaders)(rawHeaders);
 }
 //# sourceMappingURL=httpHeaders.js.map
 
@@ -108189,7 +109399,7 @@ function createHttpHeaders(rawHeaders) {
 // Copyright (c) Microsoft Corporation.
 // Licensed under the MIT License.
 Object.defineProperty(exports, "__esModule", ({ value: true }));
-exports.createFileFromStream = exports.createFile = exports.auxiliaryAuthenticationHeaderPolicyName = exports.auxiliaryAuthenticationHeaderPolicy = exports.ndJsonPolicyName = exports.ndJsonPolicy = exports.bearerTokenAuthenticationPolicyName = exports.bearerTokenAuthenticationPolicy = exports.formDataPolicyName = exports.formDataPolicy = exports.tlsPolicyName = exports.tlsPolicy = exports.userAgentPolicyName = exports.userAgentPolicy = exports.defaultRetryPolicy = exports.tracingPolicyName = exports.tracingPolicy = exports.retryPolicy = exports.throttlingRetryPolicyName = exports.throttlingRetryPolicy = exports.systemErrorRetryPolicyName = exports.systemErrorRetryPolicy = exports.redirectPolicyName = exports.redirectPolicy = exports.getDefaultProxySettings = exports.proxyPolicyName = exports.proxyPolicy = exports.multipartPolicyName = exports.multipartPolicy = exports.logPolicyName = exports.logPolicy = exports.setClientRequestIdPolicyName = exports.setClientRequestIdPolicy = exports.exponentialRetryPolicyName = exports.exponentialRetryPolicy = exports.decompressResponsePolicyName = exports.decompressResponsePolicy = exports.isRestError = exports.RestError = exports.createPipelineRequest = exports.createHttpHeaders = exports.createDefaultHttpClient = exports.createPipelineFromOptions = exports.createEmptyPipeline = void 0;
+exports.createFileFromStream = exports.createFile = exports.agentPolicyName = exports.agentPolicy = exports.auxiliaryAuthenticationHeaderPolicyName = exports.auxiliaryAuthenticationHeaderPolicy = exports.ndJsonPolicyName = exports.ndJsonPolicy = exports.bearerTokenAuthenticationPolicyName = exports.bearerTokenAuthenticationPolicy = exports.formDataPolicyName = exports.formDataPolicy = exports.tlsPolicyName = exports.tlsPolicy = exports.userAgentPolicyName = exports.userAgentPolicy = exports.defaultRetryPolicy = exports.tracingPolicyName = exports.tracingPolicy = exports.retryPolicy = exports.throttlingRetryPolicyName = exports.throttlingRetryPolicy = exports.systemErrorRetryPolicyName = exports.systemErrorRetryPolicy = exports.redirectPolicyName = exports.redirectPolicy = exports.getDefaultProxySettings = exports.proxyPolicyName = exports.proxyPolicy = exports.multipartPolicyName = exports.multipartPolicy = exports.logPolicyName = exports.logPolicy = exports.setClientRequestIdPolicyName = exports.setClientRequestIdPolicy = exports.exponentialRetryPolicyName = exports.exponentialRetryPolicy = exports.decompressResponsePolicyName = exports.decompressResponsePolicy = exports.isRestError = exports.RestError = exports.createPipelineRequest = exports.createHttpHeaders = exports.createDefaultHttpClient = exports.createPipelineFromOptions = exports.createEmptyPipeline = void 0;
 var pipeline_js_1 = __nccwpck_require__(29590);
 Object.defineProperty(exports, "createEmptyPipeline", ({ enumerable: true, get: function () { return pipeline_js_1.createEmptyPipeline; } }));
 var createPipelineFromOptions_js_1 = __nccwpck_require__(90862);
@@ -108256,6 +109466,9 @@ Object.defineProperty(exports, "ndJsonPolicyName", ({ enumerable: true, get: fun
 var auxiliaryAuthenticationHeaderPolicy_js_1 = __nccwpck_require__(42262);
 Object.defineProperty(exports, "auxiliaryAuthenticationHeaderPolicy", ({ enumerable: true, get: function () { return auxiliaryAuthenticationHeaderPolicy_js_1.auxiliaryAuthenticationHeaderPolicy; } }));
 Object.defineProperty(exports, "auxiliaryAuthenticationHeaderPolicyName", ({ enumerable: true, get: function () { return auxiliaryAuthenticationHeaderPolicy_js_1.auxiliaryAuthenticationHeaderPolicyName; } }));
+var agentPolicy_js_1 = __nccwpck_require__(18554);
+Object.defineProperty(exports, "agentPolicy", ({ enumerable: true, get: function () { return agentPolicy_js_1.agentPolicy; } }));
+Object.defineProperty(exports, "agentPolicyName", ({ enumerable: true, get: function () { return agentPolicy_js_1.agentPolicyName; } }));
 var file_js_1 = __nccwpck_require__(97073);
 Object.defineProperty(exports, "createFile", ({ enumerable: true, get: function () { return file_js_1.createFile; } }));
 Object.defineProperty(exports, "createFileFromStream", ({ enumerable: true, get: function () { return file_js_1.createFileFromStream; } }));
@@ -108278,7 +109491,7 @@ exports.logger = (0, logger_1.createClientLogger)("core-rest-pipeline");
 
 /***/ }),
 
-/***/ 10195:
+/***/ 29590:
 /***/ ((__unused_webpack_module, exports, __nccwpck_require__) => {
 
 "use strict";
@@ -108286,618 +109499,14 @@ exports.logger = (0, logger_1.createClientLogger)("core-rest-pipeline");
 // Copyright (c) Microsoft Corporation.
 // Licensed under the MIT License.
 Object.defineProperty(exports, "__esModule", ({ value: true }));
-exports.getBodyLength = getBodyLength;
-exports.createNodeHttpClient = createNodeHttpClient;
-const tslib_1 = __nccwpck_require__(61860);
-const http = tslib_1.__importStar(__nccwpck_require__(37067));
-const https = tslib_1.__importStar(__nccwpck_require__(44708));
-const zlib = tslib_1.__importStar(__nccwpck_require__(38522));
-const node_stream_1 = __nccwpck_require__(57075);
-const abort_controller_1 = __nccwpck_require__(93287);
-const httpHeaders_js_1 = __nccwpck_require__(192);
-const restError_js_1 = __nccwpck_require__(8666);
-const log_js_1 = __nccwpck_require__(80544);
-const DEFAULT_TLS_SETTINGS = {};
-function isReadableStream(body) {
-    return body && typeof body.pipe === "function";
-}
-function isStreamComplete(stream) {
-    if (stream.readable === false) {
-        return Promise.resolve();
-    }
-    return new Promise((resolve) => {
-        const handler = () => {
-            resolve();
-            stream.removeListener("close", handler);
-            stream.removeListener("end", handler);
-            stream.removeListener("error", handler);
-        };
-        stream.on("close", handler);
-        stream.on("end", handler);
-        stream.on("error", handler);
-    });
-}
-function isArrayBuffer(body) {
-    return body && typeof body.byteLength === "number";
-}
-class ReportTransform extends node_stream_1.Transform {
-    // eslint-disable-next-line @typescript-eslint/no-unsafe-function-type
-    _transform(chunk, _encoding, callback) {
-        this.push(chunk);
-        this.loadedBytes += chunk.length;
-        try {
-            this.progressCallback({ loadedBytes: this.loadedBytes });
-            callback();
-        }
-        catch (e) {
-            callback(e);
-        }
-    }
-    constructor(progressCallback) {
-        super();
-        this.loadedBytes = 0;
-        this.progressCallback = progressCallback;
-    }
-}
-/**
- * A HttpClient implementation that uses Node's "https" module to send HTTPS requests.
- * @internal
- */
-class NodeHttpClient {
-    constructor() {
-        this.cachedHttpsAgents = new WeakMap();
-    }
-    /**
-     * Makes a request over an underlying transport layer and returns the response.
-     * @param request - The request to be made.
-     */
-    async sendRequest(request) {
-        var _a, _b, _c;
-        const abortController = new AbortController();
-        let abortListener;
-        if (request.abortSignal) {
-            if (request.abortSignal.aborted) {
-                throw new abort_controller_1.AbortError("The operation was aborted.");
-            }
-            abortListener = (event) => {
-                if (event.type === "abort") {
-                    abortController.abort();
-                }
-            };
-            request.abortSignal.addEventListener("abort", abortListener);
-        }
-        if (request.timeout > 0) {
-            setTimeout(() => {
-                abortController.abort();
-            }, request.timeout);
-        }
-        const acceptEncoding = request.headers.get("Accept-Encoding");
-        const shouldDecompress = (acceptEncoding === null || acceptEncoding === void 0 ? void 0 : acceptEncoding.includes("gzip")) || (acceptEncoding === null || acceptEncoding === void 0 ? void 0 : acceptEncoding.includes("deflate"));
-        let body = typeof request.body === "function" ? request.body() : request.body;
-        if (body && !request.headers.has("Content-Length")) {
-            const bodyLength = getBodyLength(body);
-            if (bodyLength !== null) {
-                request.headers.set("Content-Length", bodyLength);
-            }
-        }
-        let responseStream;
-        try {
-            if (body && request.onUploadProgress) {
-                const onUploadProgress = request.onUploadProgress;
-                const uploadReportStream = new ReportTransform(onUploadProgress);
-                uploadReportStream.on("error", (e) => {
-                    log_js_1.logger.error("Error in upload progress", e);
-                });
-                if (isReadableStream(body)) {
-                    body.pipe(uploadReportStream);
-                }
-                else {
-                    uploadReportStream.end(body);
-                }
-                body = uploadReportStream;
-            }
-            const res = await this.makeRequest(request, abortController, body);
-            const headers = getResponseHeaders(res);
-            const status = (_a = res.statusCode) !== null && _a !== void 0 ? _a : 0;
-            const response = {
-                status,
-                headers,
-                request,
-            };
-            // Responses to HEAD must not have a body.
-            // If they do return a body, that body must be ignored.
-            if (request.method === "HEAD") {
-                // call resume() and not destroy() to avoid closing the socket
-                // and losing keep alive
-                res.resume();
-                return response;
-            }
-            responseStream = shouldDecompress ? getDecodedResponseStream(res, headers) : res;
-            const onDownloadProgress = request.onDownloadProgress;
-            if (onDownloadProgress) {
-                const downloadReportStream = new ReportTransform(onDownloadProgress);
-                downloadReportStream.on("error", (e) => {
-                    log_js_1.logger.error("Error in download progress", e);
-                });
-                responseStream.pipe(downloadReportStream);
-                responseStream = downloadReportStream;
-            }
-            if (
-            // Value of POSITIVE_INFINITY in streamResponseStatusCodes is considered as any status code
-            ((_b = request.streamResponseStatusCodes) === null || _b === void 0 ? void 0 : _b.has(Number.POSITIVE_INFINITY)) ||
-                ((_c = request.streamResponseStatusCodes) === null || _c === void 0 ? void 0 : _c.has(response.status))) {
-                response.readableStreamBody = responseStream;
-            }
-            else {
-                response.bodyAsText = await streamToText(responseStream);
-            }
-            return response;
-        }
-        finally {
-            // clean up event listener
-            if (request.abortSignal && abortListener) {
-                let uploadStreamDone = Promise.resolve();
-                if (isReadableStream(body)) {
-                    uploadStreamDone = isStreamComplete(body);
-                }
-                let downloadStreamDone = Promise.resolve();
-                if (isReadableStream(responseStream)) {
-                    downloadStreamDone = isStreamComplete(responseStream);
-                }
-                Promise.all([uploadStreamDone, downloadStreamDone])
-                    .then(() => {
-                    var _a;
-                    // eslint-disable-next-line promise/always-return
-                    if (abortListener) {
-                        (_a = request.abortSignal) === null || _a === void 0 ? void 0 : _a.removeEventListener("abort", abortListener);
-                    }
-                })
-                    .catch((e) => {
-                    log_js_1.logger.warning("Error when cleaning up abortListener on httpRequest", e);
-                });
-            }
-        }
-    }
-    makeRequest(request, abortController, body) {
-        var _a;
-        const url = new URL(request.url);
-        const isInsecure = url.protocol !== "https:";
-        if (isInsecure && !request.allowInsecureConnection) {
-            throw new Error(`Cannot connect to ${request.url} while allowInsecureConnection is false.`);
-        }
-        const agent = (_a = request.agent) !== null && _a !== void 0 ? _a : this.getOrCreateAgent(request, isInsecure);
-        const options = {
-            agent,
-            hostname: url.hostname,
-            path: `${url.pathname}${url.search}`,
-            port: url.port,
-            method: request.method,
-            headers: request.headers.toJSON({ preserveCase: true }),
-        };
-        return new Promise((resolve, reject) => {
-            const req = isInsecure ? http.request(options, resolve) : https.request(options, resolve);
-            req.once("error", (err) => {
-                var _a;
-                reject(new restError_js_1.RestError(err.message, { code: (_a = err.code) !== null && _a !== void 0 ? _a : restError_js_1.RestError.REQUEST_SEND_ERROR, request }));
-            });
-            abortController.signal.addEventListener("abort", () => {
-                const abortError = new abort_controller_1.AbortError("The operation was aborted.");
-                req.destroy(abortError);
-                reject(abortError);
-            });
-            if (body && isReadableStream(body)) {
-                body.pipe(req);
-            }
-            else if (body) {
-                if (typeof body === "string" || Buffer.isBuffer(body)) {
-                    req.end(body);
-                }
-                else if (isArrayBuffer(body)) {
-                    req.end(ArrayBuffer.isView(body) ? Buffer.from(body.buffer) : Buffer.from(body));
-                }
-                else {
-                    log_js_1.logger.error("Unrecognized body type", body);
-                    reject(new restError_js_1.RestError("Unrecognized body type"));
-                }
-            }
-            else {
-                // streams don't like "undefined" being passed as data
-                req.end();
-            }
-        });
-    }
-    getOrCreateAgent(request, isInsecure) {
-        var _a;
-        const disableKeepAlive = request.disableKeepAlive;
-        // Handle Insecure requests first
-        if (isInsecure) {
-            if (disableKeepAlive) {
-                // keepAlive:false is the default so we don't need a custom Agent
-                return http.globalAgent;
-            }
-            if (!this.cachedHttpAgent) {
-                // If there is no cached agent create a new one and cache it.
-                this.cachedHttpAgent = new http.Agent({ keepAlive: true });
-            }
-            return this.cachedHttpAgent;
-        }
-        else {
-            if (disableKeepAlive && !request.tlsSettings) {
-                // When there are no tlsSettings and keepAlive is false
-                // we don't need a custom agent
-                return https.globalAgent;
-            }
-            // We use the tlsSettings to index cached clients
-            const tlsSettings = (_a = request.tlsSettings) !== null && _a !== void 0 ? _a : DEFAULT_TLS_SETTINGS;
-            // Get the cached agent or create a new one with the
-            // provided values for keepAlive and tlsSettings
-            let agent = this.cachedHttpsAgents.get(tlsSettings);
-            if (agent && agent.options.keepAlive === !disableKeepAlive) {
-                return agent;
-            }
-            log_js_1.logger.info("No cached TLS Agent exist, creating a new Agent");
-            agent = new https.Agent(Object.assign({ 
-                // keepAlive is true if disableKeepAlive is false.
-                keepAlive: !disableKeepAlive }, tlsSettings));
-            this.cachedHttpsAgents.set(tlsSettings, agent);
-            return agent;
-        }
-    }
-}
-function getResponseHeaders(res) {
-    const headers = (0, httpHeaders_js_1.createHttpHeaders)();
-    for (const header of Object.keys(res.headers)) {
-        const value = res.headers[header];
-        if (Array.isArray(value)) {
-            if (value.length > 0) {
-                headers.set(header, value[0]);
-            }
-        }
-        else if (value) {
-            headers.set(header, value);
-        }
-    }
-    return headers;
-}
-function getDecodedResponseStream(stream, headers) {
-    const contentEncoding = headers.get("Content-Encoding");
-    if (contentEncoding === "gzip") {
-        const unzip = zlib.createGunzip();
-        stream.pipe(unzip);
-        return unzip;
-    }
-    else if (contentEncoding === "deflate") {
-        const inflate = zlib.createInflate();
-        stream.pipe(inflate);
-        return inflate;
-    }
-    return stream;
-}
-function streamToText(stream) {
-    return new Promise((resolve, reject) => {
-        const buffer = [];
-        stream.on("data", (chunk) => {
-            if (Buffer.isBuffer(chunk)) {
-                buffer.push(chunk);
-            }
-            else {
-                buffer.push(Buffer.from(chunk));
-            }
-        });
-        stream.on("end", () => {
-            resolve(Buffer.concat(buffer).toString("utf8"));
-        });
-        stream.on("error", (e) => {
-            if (e && (e === null || e === void 0 ? void 0 : e.name) === "AbortError") {
-                reject(e);
-            }
-            else {
-                reject(new restError_js_1.RestError(`Error reading response as text: ${e.message}`, {
-                    code: restError_js_1.RestError.PARSE_ERROR,
-                }));
-            }
-        });
-    });
-}
-/** @internal */
-function getBodyLength(body) {
-    if (!body) {
-        return 0;
-    }
-    else if (Buffer.isBuffer(body)) {
-        return body.length;
-    }
-    else if (isReadableStream(body)) {
-        return null;
-    }
-    else if (isArrayBuffer(body)) {
-        return body.byteLength;
-    }
-    else if (typeof body === "string") {
-        return Buffer.from(body).length;
-    }
-    else {
-        return null;
-    }
-}
-/**
- * Create a new HttpClient instance for the NodeJS environment.
- * @internal
- */
-function createNodeHttpClient() {
-    return new NodeHttpClient();
-}
-//# sourceMappingURL=nodeHttpClient.js.map
-
-/***/ }),
-
-/***/ 29590:
-/***/ ((__unused_webpack_module, exports) => {
-
-"use strict";
-
-// Copyright (c) Microsoft Corporation.
-// Licensed under the MIT License.
-Object.defineProperty(exports, "__esModule", ({ value: true }));
 exports.createEmptyPipeline = createEmptyPipeline;
-const ValidPhaseNames = new Set(["Deserialize", "Serialize", "Retry", "Sign"]);
-/**
- * A private implementation of Pipeline.
- * Do not export this class from the package.
- * @internal
- */
-class HttpPipeline {
-    constructor(policies) {
-        var _a;
-        this._policies = [];
-        this._policies = (_a = policies === null || policies === void 0 ? void 0 : policies.slice(0)) !== null && _a !== void 0 ? _a : [];
-        this._orderedPolicies = undefined;
-    }
-    addPolicy(policy, options = {}) {
-        if (options.phase && options.afterPhase) {
-            throw new Error("Policies inside a phase cannot specify afterPhase.");
-        }
-        if (options.phase && !ValidPhaseNames.has(options.phase)) {
-            throw new Error(`Invalid phase name: ${options.phase}`);
-        }
-        if (options.afterPhase && !ValidPhaseNames.has(options.afterPhase)) {
-            throw new Error(`Invalid afterPhase name: ${options.afterPhase}`);
-        }
-        this._policies.push({
-            policy,
-            options,
-        });
-        this._orderedPolicies = undefined;
-    }
-    removePolicy(options) {
-        const removedPolicies = [];
-        this._policies = this._policies.filter((policyDescriptor) => {
-            if ((options.name && policyDescriptor.policy.name === options.name) ||
-                (options.phase && policyDescriptor.options.phase === options.phase)) {
-                removedPolicies.push(policyDescriptor.policy);
-                return false;
-            }
-            else {
-                return true;
-            }
-        });
-        this._orderedPolicies = undefined;
-        return removedPolicies;
-    }
-    sendRequest(httpClient, request) {
-        const policies = this.getOrderedPolicies();
-        const pipeline = policies.reduceRight((next, policy) => {
-            return (req) => {
-                return policy.sendRequest(req, next);
-            };
-        }, (req) => httpClient.sendRequest(req));
-        return pipeline(request);
-    }
-    getOrderedPolicies() {
-        if (!this._orderedPolicies) {
-            this._orderedPolicies = this.orderPolicies();
-        }
-        return this._orderedPolicies;
-    }
-    clone() {
-        return new HttpPipeline(this._policies);
-    }
-    static create() {
-        return new HttpPipeline();
-    }
-    orderPolicies() {
-        /**
-         * The goal of this method is to reliably order pipeline policies
-         * based on their declared requirements when they were added.
-         *
-         * Order is first determined by phase:
-         *
-         * 1. Serialize Phase
-         * 2. Policies not in a phase
-         * 3. Deserialize Phase
-         * 4. Retry Phase
-         * 5. Sign Phase
-         *
-         * Within each phase, policies are executed in the order
-         * they were added unless they were specified to execute
-         * before/after other policies or after a particular phase.
-         *
-         * To determine the final order, we will walk the policy list
-         * in phase order multiple times until all dependencies are
-         * satisfied.
-         *
-         * `afterPolicies` are the set of policies that must be
-         * executed before a given policy. This requirement is
-         * considered satisfied when each of the listed policies
-         * have been scheduled.
-         *
-         * `beforePolicies` are the set of policies that must be
-         * executed after a given policy. Since this dependency
-         * can be expressed by converting it into a equivalent
-         * `afterPolicies` declarations, they are normalized
-         * into that form for simplicity.
-         *
-         * An `afterPhase` dependency is considered satisfied when all
-         * policies in that phase have scheduled.
-         *
-         */
-        const result = [];
-        // Track all policies we know about.
-        const policyMap = new Map();
-        function createPhase(name) {
-            return {
-                name,
-                policies: new Set(),
-                hasRun: false,
-                hasAfterPolicies: false,
-            };
-        }
-        // Track policies for each phase.
-        const serializePhase = createPhase("Serialize");
-        const noPhase = createPhase("None");
-        const deserializePhase = createPhase("Deserialize");
-        const retryPhase = createPhase("Retry");
-        const signPhase = createPhase("Sign");
-        // a list of phases in order
-        const orderedPhases = [serializePhase, noPhase, deserializePhase, retryPhase, signPhase];
-        // Small helper function to map phase name to each Phase
-        function getPhase(phase) {
-            if (phase === "Retry") {
-                return retryPhase;
-            }
-            else if (phase === "Serialize") {
-                return serializePhase;
-            }
-            else if (phase === "Deserialize") {
-                return deserializePhase;
-            }
-            else if (phase === "Sign") {
-                return signPhase;
-            }
-            else {
-                return noPhase;
-            }
-        }
-        // First walk each policy and create a node to track metadata.
-        for (const descriptor of this._policies) {
-            const policy = descriptor.policy;
-            const options = descriptor.options;
-            const policyName = policy.name;
-            if (policyMap.has(policyName)) {
-                throw new Error("Duplicate policy names not allowed in pipeline");
-            }
-            const node = {
-                policy,
-                dependsOn: new Set(),
-                dependants: new Set(),
-            };
-            if (options.afterPhase) {
-                node.afterPhase = getPhase(options.afterPhase);
-                node.afterPhase.hasAfterPolicies = true;
-            }
-            policyMap.set(policyName, node);
-            const phase = getPhase(options.phase);
-            phase.policies.add(node);
-        }
-        // Now that each policy has a node, connect dependency references.
-        for (const descriptor of this._policies) {
-            const { policy, options } = descriptor;
-            const policyName = policy.name;
-            const node = policyMap.get(policyName);
-            if (!node) {
-                throw new Error(`Missing node for policy ${policyName}`);
-            }
-            if (options.afterPolicies) {
-                for (const afterPolicyName of options.afterPolicies) {
-                    const afterNode = policyMap.get(afterPolicyName);
-                    if (afterNode) {
-                        // Linking in both directions helps later
-                        // when we want to notify dependants.
-                        node.dependsOn.add(afterNode);
-                        afterNode.dependants.add(node);
-                    }
-                }
-            }
-            if (options.beforePolicies) {
-                for (const beforePolicyName of options.beforePolicies) {
-                    const beforeNode = policyMap.get(beforePolicyName);
-                    if (beforeNode) {
-                        // To execute before another node, make it
-                        // depend on the current node.
-                        beforeNode.dependsOn.add(node);
-                        node.dependants.add(beforeNode);
-                    }
-                }
-            }
-        }
-        function walkPhase(phase) {
-            phase.hasRun = true;
-            // Sets iterate in insertion order
-            for (const node of phase.policies) {
-                if (node.afterPhase && (!node.afterPhase.hasRun || node.afterPhase.policies.size)) {
-                    // If this node is waiting on a phase to complete,
-                    // we need to skip it for now.
-                    // Even if the phase is empty, we should wait for it
-                    // to be walked to avoid re-ordering policies.
-                    continue;
-                }
-                if (node.dependsOn.size === 0) {
-                    // If there's nothing else we're waiting for, we can
-                    // add this policy to the result list.
-                    result.push(node.policy);
-                    // Notify anything that depends on this policy that
-                    // the policy has been scheduled.
-                    for (const dependant of node.dependants) {
-                        dependant.dependsOn.delete(node);
-                    }
-                    policyMap.delete(node.policy.name);
-                    phase.policies.delete(node);
-                }
-            }
-        }
-        function walkPhases() {
-            for (const phase of orderedPhases) {
-                walkPhase(phase);
-                // if the phase isn't complete
-                if (phase.policies.size > 0 && phase !== noPhase) {
-                    if (!noPhase.hasRun) {
-                        // Try running noPhase to see if that unblocks this phase next tick.
-                        // This can happen if a phase that happens before noPhase
-                        // is waiting on a noPhase policy to complete.
-                        walkPhase(noPhase);
-                    }
-                    // Don't proceed to the next phase until this phase finishes.
-                    return;
-                }
-                if (phase.hasAfterPolicies) {
-                    // Run any policies unblocked by this phase
-                    walkPhase(noPhase);
-                }
-            }
-        }
-        // Iterate until we've put every node in the result list.
-        let iteration = 0;
-        while (policyMap.size > 0) {
-            iteration++;
-            const initialResultLength = result.length;
-            // Keep walking each phase in order until we can order every node.
-            walkPhases();
-            // The result list *should* get at least one larger each time
-            // after the first full pass.
-            // Otherwise, we're going to loop forever.
-            if (result.length <= initialResultLength && iteration > 1) {
-                throw new Error("Cannot satisfy policy dependencies due to requirements cycle.");
-            }
-        }
-        return result;
-    }
-}
+const ts_http_runtime_1 = __nccwpck_require__(41958);
 /**
  * Creates a totally empty pipeline.
  * Useful for testing or creating a custom one.
  */
 function createEmptyPipeline() {
-    return HttpPipeline.create();
+    return (0, ts_http_runtime_1.createEmptyPipeline)();
 }
 //# sourceMappingURL=pipeline.js.map
 
@@ -108912,40 +109521,44 @@ function createEmptyPipeline() {
 // Licensed under the MIT License.
 Object.defineProperty(exports, "__esModule", ({ value: true }));
 exports.createPipelineRequest = createPipelineRequest;
-const httpHeaders_js_1 = __nccwpck_require__(192);
-const core_util_1 = __nccwpck_require__(87779);
-class PipelineRequestImpl {
-    constructor(options) {
-        var _a, _b, _c, _d, _e, _f, _g;
-        this.url = options.url;
-        this.body = options.body;
-        this.headers = (_a = options.headers) !== null && _a !== void 0 ? _a : (0, httpHeaders_js_1.createHttpHeaders)();
-        this.method = (_b = options.method) !== null && _b !== void 0 ? _b : "GET";
-        this.timeout = (_c = options.timeout) !== null && _c !== void 0 ? _c : 0;
-        this.multipartBody = options.multipartBody;
-        this.formData = options.formData;
-        this.disableKeepAlive = (_d = options.disableKeepAlive) !== null && _d !== void 0 ? _d : false;
-        this.proxySettings = options.proxySettings;
-        this.streamResponseStatusCodes = options.streamResponseStatusCodes;
-        this.withCredentials = (_e = options.withCredentials) !== null && _e !== void 0 ? _e : false;
-        this.abortSignal = options.abortSignal;
-        this.tracingOptions = options.tracingOptions;
-        this.onUploadProgress = options.onUploadProgress;
-        this.onDownloadProgress = options.onDownloadProgress;
-        this.requestId = options.requestId || (0, core_util_1.randomUUID)();
-        this.allowInsecureConnection = (_f = options.allowInsecureConnection) !== null && _f !== void 0 ? _f : false;
-        this.enableBrowserStreams = (_g = options.enableBrowserStreams) !== null && _g !== void 0 ? _g : false;
-    }
-}
+const ts_http_runtime_1 = __nccwpck_require__(41958);
 /**
  * Creates a new pipeline request with the given options.
  * This method is to allow for the easy setting of default values and not required.
  * @param options - The options to create the request with.
  */
 function createPipelineRequest(options) {
-    return new PipelineRequestImpl(options);
+    // Cast required due to difference between ts-http-runtime requiring AbortSignal while core-rest-pipeline allows
+    // the more generic AbortSignalLike. The wrapAbortSignalLike pipeline policy will take care of ensuring that any AbortSignalLike in the request
+    // is converted into a true AbortSignal.
+    return (0, ts_http_runtime_1.createPipelineRequest)(options);
 }
 //# sourceMappingURL=pipelineRequest.js.map
+
+/***/ }),
+
+/***/ 18554:
+/***/ ((__unused_webpack_module, exports, __nccwpck_require__) => {
+
+"use strict";
+
+// Copyright (c) Microsoft Corporation.
+// Licensed under the MIT License.
+Object.defineProperty(exports, "__esModule", ({ value: true }));
+exports.agentPolicyName = void 0;
+exports.agentPolicy = agentPolicy;
+const policies_1 = __nccwpck_require__(44960);
+/**
+ * Name of the Agent Policy
+ */
+exports.agentPolicyName = policies_1.agentPolicyName;
+/**
+ * Gets a pipeline policy that sets http.agent
+ */
+function agentPolicy(agent) {
+    return (0, policies_1.agentPolicy)(agent);
+}
+//# sourceMappingURL=agentPolicy.js.map
 
 /***/ }),
 
@@ -108979,7 +109592,7 @@ async function sendAuthorizeRequest(options) {
  * A policy for external tokens to `x-ms-authorization-auxiliary` header.
  * This header will be used when creating a cross-tenant application we may need to handle authentication requests
  * for resources that are in different tenants.
- * You could see [ARM docs](https://learn.microsoft.com/en-us/azure/azure-resource-manager/management/authenticate-multi-tenant) for a rundown of how this feature works
+ * You could see [ARM docs](https://learn.microsoft.com/azure/azure-resource-manager/management/authenticate-multi-tenant) for a rundown of how this feature works
  */
 function auxiliaryAuthenticationHeaderPolicy(options) {
     const { credentials, scopes } = options;
@@ -109274,7 +109887,7 @@ function getCaeChallengeClaims(challenges) {
 /***/ }),
 
 /***/ 39295:
-/***/ ((__unused_webpack_module, exports) => {
+/***/ ((__unused_webpack_module, exports, __nccwpck_require__) => {
 
 "use strict";
 
@@ -109283,25 +109896,17 @@ function getCaeChallengeClaims(challenges) {
 Object.defineProperty(exports, "__esModule", ({ value: true }));
 exports.decompressResponsePolicyName = void 0;
 exports.decompressResponsePolicy = decompressResponsePolicy;
+const policies_1 = __nccwpck_require__(44960);
 /**
  * The programmatic identifier of the decompressResponsePolicy.
  */
-exports.decompressResponsePolicyName = "decompressResponsePolicy";
+exports.decompressResponsePolicyName = policies_1.decompressResponsePolicyName;
 /**
  * A policy to enable response decompression according to Accept-Encoding header
  * https://developer.mozilla.org/en-US/docs/Web/HTTP/Headers/Accept-Encoding
  */
 function decompressResponsePolicy() {
-    return {
-        name: exports.decompressResponsePolicyName,
-        async sendRequest(request, next) {
-            // HEAD requests have no body
-            if (request.method !== "HEAD") {
-                request.headers.set("Accept-Encoding", "gzip,deflate");
-            }
-            return next(request);
-        },
-    };
+    return (0, policies_1.decompressResponsePolicy)();
 }
 //# sourceMappingURL=decompressResponsePolicy.js.map
 
@@ -109317,14 +109922,11 @@ function decompressResponsePolicy() {
 Object.defineProperty(exports, "__esModule", ({ value: true }));
 exports.defaultRetryPolicyName = void 0;
 exports.defaultRetryPolicy = defaultRetryPolicy;
-const exponentialRetryStrategy_js_1 = __nccwpck_require__(50002);
-const throttlingRetryStrategy_js_1 = __nccwpck_require__(97084);
-const retryPolicy_js_1 = __nccwpck_require__(56085);
-const constants_js_1 = __nccwpck_require__(66427);
+const policies_1 = __nccwpck_require__(44960);
 /**
  * Name of the {@link defaultRetryPolicy}
  */
-exports.defaultRetryPolicyName = "defaultRetryPolicy";
+exports.defaultRetryPolicyName = policies_1.defaultRetryPolicyName;
 /**
  * A policy that retries according to three strategies:
  * - When the server sends a 429 response with a Retry-After header.
@@ -109332,13 +109934,7 @@ exports.defaultRetryPolicyName = "defaultRetryPolicy";
  * - Or otherwise if the outgoing request fails, it will retry with an exponentially increasing delay.
  */
 function defaultRetryPolicy(options = {}) {
-    var _a;
-    return {
-        name: exports.defaultRetryPolicyName,
-        sendRequest: (0, retryPolicy_js_1.retryPolicy)([(0, throttlingRetryStrategy_js_1.throttlingRetryStrategy)(), (0, exponentialRetryStrategy_js_1.exponentialRetryStrategy)(options)], {
-            maxRetries: (_a = options.maxRetries) !== null && _a !== void 0 ? _a : constants_js_1.DEFAULT_RETRY_POLICY_COUNT,
-        }).sendRequest,
-    };
+    return (0, policies_1.defaultRetryPolicy)(options);
 }
 //# sourceMappingURL=defaultRetryPolicy.js.map
 
@@ -109354,24 +109950,17 @@ function defaultRetryPolicy(options = {}) {
 Object.defineProperty(exports, "__esModule", ({ value: true }));
 exports.exponentialRetryPolicyName = void 0;
 exports.exponentialRetryPolicy = exponentialRetryPolicy;
-const exponentialRetryStrategy_js_1 = __nccwpck_require__(50002);
-const retryPolicy_js_1 = __nccwpck_require__(56085);
-const constants_js_1 = __nccwpck_require__(66427);
+const policies_1 = __nccwpck_require__(44960);
 /**
  * The programmatic identifier of the exponentialRetryPolicy.
  */
-exports.exponentialRetryPolicyName = "exponentialRetryPolicy";
+exports.exponentialRetryPolicyName = policies_1.exponentialRetryPolicyName;
 /**
  * A policy that attempts to retry requests while introducing an exponentially increasing delay.
  * @param options - Options that configure retry logic.
  */
 function exponentialRetryPolicy(options = {}) {
-    var _a;
-    return (0, retryPolicy_js_1.retryPolicy)([
-        (0, exponentialRetryStrategy_js_1.exponentialRetryStrategy)(Object.assign(Object.assign({}, options), { ignoreSystemErrors: true })),
-    ], {
-        maxRetries: (_a = options.maxRetries) !== null && _a !== void 0 ? _a : constants_js_1.DEFAULT_RETRY_POLICY_COUNT,
-    });
+    return (0, policies_1.exponentialRetryPolicy)(options);
 }
 //# sourceMappingURL=exponentialRetryPolicy.js.map
 
@@ -109387,98 +109976,16 @@ function exponentialRetryPolicy(options = {}) {
 Object.defineProperty(exports, "__esModule", ({ value: true }));
 exports.formDataPolicyName = void 0;
 exports.formDataPolicy = formDataPolicy;
-const core_util_1 = __nccwpck_require__(87779);
-const httpHeaders_js_1 = __nccwpck_require__(192);
+const policies_1 = __nccwpck_require__(44960);
 /**
  * The programmatic identifier of the formDataPolicy.
  */
-exports.formDataPolicyName = "formDataPolicy";
-function formDataToFormDataMap(formData) {
-    var _a;
-    const formDataMap = {};
-    for (const [key, value] of formData.entries()) {
-        (_a = formDataMap[key]) !== null && _a !== void 0 ? _a : (formDataMap[key] = []);
-        formDataMap[key].push(value);
-    }
-    return formDataMap;
-}
+exports.formDataPolicyName = policies_1.formDataPolicyName;
 /**
  * A policy that encodes FormData on the request into the body.
  */
 function formDataPolicy() {
-    return {
-        name: exports.formDataPolicyName,
-        async sendRequest(request, next) {
-            if (core_util_1.isNodeLike && typeof FormData !== "undefined" && request.body instanceof FormData) {
-                request.formData = formDataToFormDataMap(request.body);
-                request.body = undefined;
-            }
-            if (request.formData) {
-                const contentType = request.headers.get("Content-Type");
-                if (contentType && contentType.indexOf("application/x-www-form-urlencoded") !== -1) {
-                    request.body = wwwFormUrlEncode(request.formData);
-                }
-                else {
-                    await prepareFormData(request.formData, request);
-                }
-                request.formData = undefined;
-            }
-            return next(request);
-        },
-    };
-}
-function wwwFormUrlEncode(formData) {
-    const urlSearchParams = new URLSearchParams();
-    for (const [key, value] of Object.entries(formData)) {
-        if (Array.isArray(value)) {
-            for (const subValue of value) {
-                urlSearchParams.append(key, subValue.toString());
-            }
-        }
-        else {
-            urlSearchParams.append(key, value.toString());
-        }
-    }
-    return urlSearchParams.toString();
-}
-async function prepareFormData(formData, request) {
-    // validate content type (multipart/form-data)
-    const contentType = request.headers.get("Content-Type");
-    if (contentType && !contentType.startsWith("multipart/form-data")) {
-        // content type is specified and is not multipart/form-data. Exit.
-        return;
-    }
-    request.headers.set("Content-Type", contentType !== null && contentType !== void 0 ? contentType : "multipart/form-data");
-    // set body to MultipartRequestBody using content from FormDataMap
-    const parts = [];
-    for (const [fieldName, values] of Object.entries(formData)) {
-        for (const value of Array.isArray(values) ? values : [values]) {
-            if (typeof value === "string") {
-                parts.push({
-                    headers: (0, httpHeaders_js_1.createHttpHeaders)({
-                        "Content-Disposition": `form-data; name="${fieldName}"`,
-                    }),
-                    body: (0, core_util_1.stringToUint8Array)(value, "utf-8"),
-                });
-            }
-            else if (value === undefined || value === null || typeof value !== "object") {
-                throw new Error(`Unexpected value for key ${fieldName}: ${value}. Value should be serialized to string first.`);
-            }
-            else {
-                // using || instead of ?? here since if value.name is empty we should create a file name
-                const fileName = value.name || "blob";
-                const headers = (0, httpHeaders_js_1.createHttpHeaders)();
-                headers.set("Content-Disposition", `form-data; name="${fieldName}"; filename="${fileName}"`);
-                // again, || is used since an empty value.type means the content type is unset
-                headers.set("Content-Type", value.type || "application/octet-stream");
-                parts.push({
-                    headers,
-                    body: value,
-                });
-            }
-        }
-    }
-    request.multipartBody = { parts };
+    return (0, policies_1.formDataPolicy)();
 }
 //# sourceMappingURL=formDataPolicy.js.map
 
@@ -109495,35 +110002,17 @@ Object.defineProperty(exports, "__esModule", ({ value: true }));
 exports.logPolicyName = void 0;
 exports.logPolicy = logPolicy;
 const log_js_1 = __nccwpck_require__(80544);
-const sanitizer_js_1 = __nccwpck_require__(35204);
+const policies_1 = __nccwpck_require__(44960);
 /**
  * The programmatic identifier of the logPolicy.
  */
-exports.logPolicyName = "logPolicy";
+exports.logPolicyName = policies_1.logPolicyName;
 /**
  * A policy that logs all requests and responses.
  * @param options - Options to configure logPolicy.
  */
 function logPolicy(options = {}) {
-    var _a;
-    const logger = (_a = options.logger) !== null && _a !== void 0 ? _a : log_js_1.logger.info;
-    const sanitizer = new sanitizer_js_1.Sanitizer({
-        additionalAllowedHeaderNames: options.additionalAllowedHeaderNames,
-        additionalAllowedQueryParameters: options.additionalAllowedQueryParameters,
-    });
-    return {
-        name: exports.logPolicyName,
-        async sendRequest(request, next) {
-            if (!logger.enabled) {
-                return next(request);
-            }
-            logger(`Request: ${sanitizer.sanitize(request)}`);
-            const response = await next(request);
-            logger(`Response status code: ${response.status}`);
-            logger(`Headers: ${sanitizer.sanitize(response.headers)}`);
-            return response;
-        },
-    };
+    return (0, policies_1.logPolicy)(Object.assign({ logger: log_js_1.logger.info }, options));
 }
 //# sourceMappingURL=logPolicy.js.map
 
@@ -109539,111 +110028,28 @@ function logPolicy(options = {}) {
 Object.defineProperty(exports, "__esModule", ({ value: true }));
 exports.multipartPolicyName = void 0;
 exports.multipartPolicy = multipartPolicy;
-const core_util_1 = __nccwpck_require__(87779);
-const concat_js_1 = __nccwpck_require__(62471);
-const typeGuards_js_1 = __nccwpck_require__(22621);
-function generateBoundary() {
-    return `----AzSDKFormBoundary${(0, core_util_1.randomUUID)()}`;
-}
-function encodeHeaders(headers) {
-    let result = "";
-    for (const [key, value] of headers) {
-        result += `${key}: ${value}\r\n`;
-    }
-    return result;
-}
-function getLength(source) {
-    if (source instanceof Uint8Array) {
-        return source.byteLength;
-    }
-    else if ((0, typeGuards_js_1.isBlob)(source)) {
-        // if was created using createFile then -1 means we have an unknown size
-        return source.size === -1 ? undefined : source.size;
-    }
-    else {
-        return undefined;
-    }
-}
-function getTotalLength(sources) {
-    let total = 0;
-    for (const source of sources) {
-        const partLength = getLength(source);
-        if (partLength === undefined) {
-            return undefined;
-        }
-        else {
-            total += partLength;
-        }
-    }
-    return total;
-}
-async function buildRequestBody(request, parts, boundary) {
-    const sources = [
-        (0, core_util_1.stringToUint8Array)(`--${boundary}`, "utf-8"),
-        ...parts.flatMap((part) => [
-            (0, core_util_1.stringToUint8Array)("\r\n", "utf-8"),
-            (0, core_util_1.stringToUint8Array)(encodeHeaders(part.headers), "utf-8"),
-            (0, core_util_1.stringToUint8Array)("\r\n", "utf-8"),
-            part.body,
-            (0, core_util_1.stringToUint8Array)(`\r\n--${boundary}`, "utf-8"),
-        ]),
-        (0, core_util_1.stringToUint8Array)("--\r\n\r\n", "utf-8"),
-    ];
-    const contentLength = getTotalLength(sources);
-    if (contentLength) {
-        request.headers.set("Content-Length", contentLength);
-    }
-    request.body = await (0, concat_js_1.concat)(sources);
-}
+const policies_1 = __nccwpck_require__(44960);
+const file_js_1 = __nccwpck_require__(97073);
 /**
  * Name of multipart policy
  */
-exports.multipartPolicyName = "multipartPolicy";
-const maxBoundaryLength = 70;
-const validBoundaryCharacters = new Set(`abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789'()+,-./:=?`);
-function assertValidBoundary(boundary) {
-    if (boundary.length > maxBoundaryLength) {
-        throw new Error(`Multipart boundary "${boundary}" exceeds maximum length of 70 characters`);
-    }
-    if (Array.from(boundary).some((x) => !validBoundaryCharacters.has(x))) {
-        throw new Error(`Multipart boundary "${boundary}" contains invalid characters`);
-    }
-}
+exports.multipartPolicyName = policies_1.multipartPolicyName;
 /**
  * Pipeline policy for multipart requests
  */
 function multipartPolicy() {
+    const tspPolicy = (0, policies_1.multipartPolicy)();
     return {
         name: exports.multipartPolicyName,
-        async sendRequest(request, next) {
-            var _a;
-            if (!request.multipartBody) {
-                return next(request);
+        sendRequest: async (request, next) => {
+            if (request.multipartBody) {
+                for (const part of request.multipartBody.parts) {
+                    if ((0, file_js_1.hasRawContent)(part.body)) {
+                        part.body = (0, file_js_1.getRawContent)(part.body);
+                    }
+                }
             }
-            if (request.body) {
-                throw new Error("multipartBody and regular body cannot be set at the same time");
-            }
-            let boundary = request.multipartBody.boundary;
-            const contentTypeHeader = (_a = request.headers.get("Content-Type")) !== null && _a !== void 0 ? _a : "multipart/mixed";
-            const parsedHeader = contentTypeHeader.match(/^(multipart\/[^ ;]+)(?:; *boundary=(.+))?$/);
-            if (!parsedHeader) {
-                throw new Error(`Got multipart request body, but content-type header was not multipart: ${contentTypeHeader}`);
-            }
-            const [, contentType, parsedBoundary] = parsedHeader;
-            if (parsedBoundary && boundary && parsedBoundary !== boundary) {
-                throw new Error(`Multipart boundary was specified as ${parsedBoundary} in the header, but got ${boundary} in the request body`);
-            }
-            boundary !== null && boundary !== void 0 ? boundary : (boundary = parsedBoundary);
-            if (boundary) {
-                assertValidBoundary(boundary);
-            }
-            else {
-                boundary = generateBoundary();
-            }
-            request.headers.set("Content-Type", `${contentType}; boundary=${boundary}`);
-            await buildRequestBody(request, request.multipartBody.parts, boundary);
-            request.multipartBody = undefined;
-            return next(request);
+            return tspPolicy.sendRequest(request, next);
         },
     };
 }
@@ -109695,94 +110101,14 @@ function ndJsonPolicy() {
 // Copyright (c) Microsoft Corporation.
 // Licensed under the MIT License.
 Object.defineProperty(exports, "__esModule", ({ value: true }));
-exports.globalNoProxyList = exports.proxyPolicyName = void 0;
-exports.loadNoProxy = loadNoProxy;
+exports.proxyPolicyName = void 0;
 exports.getDefaultProxySettings = getDefaultProxySettings;
 exports.proxyPolicy = proxyPolicy;
-const https_proxy_agent_1 = __nccwpck_require__(3669);
-const http_proxy_agent_1 = __nccwpck_require__(81970);
-const log_js_1 = __nccwpck_require__(80544);
-const HTTPS_PROXY = "HTTPS_PROXY";
-const HTTP_PROXY = "HTTP_PROXY";
-const ALL_PROXY = "ALL_PROXY";
-const NO_PROXY = "NO_PROXY";
+const policies_1 = __nccwpck_require__(44960);
 /**
  * The programmatic identifier of the proxyPolicy.
  */
-exports.proxyPolicyName = "proxyPolicy";
-/**
- * Stores the patterns specified in NO_PROXY environment variable.
- * @internal
- */
-exports.globalNoProxyList = [];
-let noProxyListLoaded = false;
-/** A cache of whether a host should bypass the proxy. */
-const globalBypassedMap = new Map();
-function getEnvironmentValue(name) {
-    if (process.env[name]) {
-        return process.env[name];
-    }
-    else if (process.env[name.toLowerCase()]) {
-        return process.env[name.toLowerCase()];
-    }
-    return undefined;
-}
-function loadEnvironmentProxyValue() {
-    if (!process) {
-        return undefined;
-    }
-    const httpsProxy = getEnvironmentValue(HTTPS_PROXY);
-    const allProxy = getEnvironmentValue(ALL_PROXY);
-    const httpProxy = getEnvironmentValue(HTTP_PROXY);
-    return httpsProxy || allProxy || httpProxy;
-}
-/**
- * Check whether the host of a given `uri` matches any pattern in the no proxy list.
- * If there's a match, any request sent to the same host shouldn't have the proxy settings set.
- * This implementation is a port of https://github.com/Azure/azure-sdk-for-net/blob/8cca811371159e527159c7eb65602477898683e2/sdk/core/Azure.Core/src/Pipeline/Internal/HttpEnvironmentProxy.cs#L210
- */
-function isBypassed(uri, noProxyList, bypassedMap) {
-    if (noProxyList.length === 0) {
-        return false;
-    }
-    const host = new URL(uri).hostname;
-    if (bypassedMap === null || bypassedMap === void 0 ? void 0 : bypassedMap.has(host)) {
-        return bypassedMap.get(host);
-    }
-    let isBypassedFlag = false;
-    for (const pattern of noProxyList) {
-        if (pattern[0] === ".") {
-            // This should match either domain it self or any subdomain or host
-            // .foo.com will match foo.com it self or *.foo.com
-            if (host.endsWith(pattern)) {
-                isBypassedFlag = true;
-            }
-            else {
-                if (host.length === pattern.length - 1 && host === pattern.slice(1)) {
-                    isBypassedFlag = true;
-                }
-            }
-        }
-        else {
-            if (host === pattern) {
-                isBypassedFlag = true;
-            }
-        }
-    }
-    bypassedMap === null || bypassedMap === void 0 ? void 0 : bypassedMap.set(host, isBypassedFlag);
-    return isBypassedFlag;
-}
-function loadNoProxy() {
-    const noProxy = getEnvironmentValue(NO_PROXY);
-    noProxyListLoaded = true;
-    if (noProxy) {
-        return noProxy
-            .split(",")
-            .map((item) => item.trim())
-            .filter((item) => item.length);
-    }
-    return [];
-}
+exports.proxyPolicyName = policies_1.proxyPolicyName;
 /**
  * This method converts a proxy url into `ProxySettings` for use with ProxyPolicy.
  * If no argument is given, it attempts to parse a proxy URL from the environment
@@ -109791,70 +110117,7 @@ function loadNoProxy() {
  * @deprecated - Internally this method is no longer necessary when setting proxy information.
  */
 function getDefaultProxySettings(proxyUrl) {
-    if (!proxyUrl) {
-        proxyUrl = loadEnvironmentProxyValue();
-        if (!proxyUrl) {
-            return undefined;
-        }
-    }
-    const parsedUrl = new URL(proxyUrl);
-    const schema = parsedUrl.protocol ? parsedUrl.protocol + "//" : "";
-    return {
-        host: schema + parsedUrl.hostname,
-        port: Number.parseInt(parsedUrl.port || "80"),
-        username: parsedUrl.username,
-        password: parsedUrl.password,
-    };
-}
-/**
- * This method attempts to parse a proxy URL from the environment
- * variables `HTTPS_PROXY` or `HTTP_PROXY`.
- */
-function getDefaultProxySettingsInternal() {
-    const envProxy = loadEnvironmentProxyValue();
-    return envProxy ? new URL(envProxy) : undefined;
-}
-function getUrlFromProxySettings(settings) {
-    let parsedProxyUrl;
-    try {
-        parsedProxyUrl = new URL(settings.host);
-    }
-    catch (_a) {
-        throw new Error(`Expecting a valid host string in proxy settings, but found "${settings.host}".`);
-    }
-    parsedProxyUrl.port = String(settings.port);
-    if (settings.username) {
-        parsedProxyUrl.username = settings.username;
-    }
-    if (settings.password) {
-        parsedProxyUrl.password = settings.password;
-    }
-    return parsedProxyUrl;
-}
-function setProxyAgentOnRequest(request, cachedAgents, proxyUrl) {
-    // Custom Agent should take precedence so if one is present
-    // we should skip to avoid overwriting it.
-    if (request.agent) {
-        return;
-    }
-    const url = new URL(request.url);
-    const isInsecure = url.protocol !== "https:";
-    if (request.tlsSettings) {
-        log_js_1.logger.warning("TLS settings are not supported in combination with custom Proxy, certificates provided to the client will be ignored.");
-    }
-    const headers = request.headers.toJSON();
-    if (isInsecure) {
-        if (!cachedAgents.httpProxyAgent) {
-            cachedAgents.httpProxyAgent = new http_proxy_agent_1.HttpProxyAgent(proxyUrl, { headers });
-        }
-        request.agent = cachedAgents.httpProxyAgent;
-    }
-    else {
-        if (!cachedAgents.httpsProxyAgent) {
-            cachedAgents.httpsProxyAgent = new https_proxy_agent_1.HttpsProxyAgent(proxyUrl, { headers });
-        }
-        request.agent = cachedAgents.httpsProxyAgent;
-    }
+    return (0, policies_1.getDefaultProxySettings)(proxyUrl);
 }
 /**
  * A policy that allows one to apply proxy settings to all requests.
@@ -109864,35 +110127,14 @@ function setProxyAgentOnRequest(request, cachedAgents, proxyUrl) {
  * @param options - additional settings, for example, custom NO_PROXY patterns
  */
 function proxyPolicy(proxySettings, options) {
-    if (!noProxyListLoaded) {
-        exports.globalNoProxyList.push(...loadNoProxy());
-    }
-    const defaultProxy = proxySettings
-        ? getUrlFromProxySettings(proxySettings)
-        : getDefaultProxySettingsInternal();
-    const cachedAgents = {};
-    return {
-        name: exports.proxyPolicyName,
-        async sendRequest(request, next) {
-            var _a;
-            if (!request.proxySettings &&
-                defaultProxy &&
-                !isBypassed(request.url, (_a = options === null || options === void 0 ? void 0 : options.customNoProxyList) !== null && _a !== void 0 ? _a : exports.globalNoProxyList, (options === null || options === void 0 ? void 0 : options.customNoProxyList) ? undefined : globalBypassedMap)) {
-                setProxyAgentOnRequest(request, cachedAgents, defaultProxy);
-            }
-            else if (request.proxySettings) {
-                setProxyAgentOnRequest(request, cachedAgents, getUrlFromProxySettings(request.proxySettings));
-            }
-            return next(request);
-        },
-    };
+    return (0, policies_1.proxyPolicy)(proxySettings, options);
 }
 //# sourceMappingURL=proxyPolicy.js.map
 
 /***/ }),
 
 /***/ 64087:
-/***/ ((__unused_webpack_module, exports) => {
+/***/ ((__unused_webpack_module, exports, __nccwpck_require__) => {
 
 "use strict";
 
@@ -109901,14 +110143,11 @@ function proxyPolicy(proxySettings, options) {
 Object.defineProperty(exports, "__esModule", ({ value: true }));
 exports.redirectPolicyName = void 0;
 exports.redirectPolicy = redirectPolicy;
+const policies_1 = __nccwpck_require__(44960);
 /**
  * The programmatic identifier of the redirectPolicy.
  */
-exports.redirectPolicyName = "redirectPolicy";
-/**
- * Methods that are allowed to follow redirects 301 and 302
- */
-const allowedRedirect = ["GET", "HEAD"];
+exports.redirectPolicyName = policies_1.redirectPolicyName;
 /**
  * A policy to follow Location headers from the server in order
  * to support server-side redirection.
@@ -109916,39 +110155,7 @@ const allowedRedirect = ["GET", "HEAD"];
  * @param options - Options to control policy behavior.
  */
 function redirectPolicy(options = {}) {
-    const { maxRetries = 20 } = options;
-    return {
-        name: exports.redirectPolicyName,
-        async sendRequest(request, next) {
-            const response = await next(request);
-            return handleRedirect(next, response, maxRetries);
-        },
-    };
-}
-async function handleRedirect(next, response, maxRetries, currentRetries = 0) {
-    const { request, status, headers } = response;
-    const locationHeader = headers.get("location");
-    if (locationHeader &&
-        (status === 300 ||
-            (status === 301 && allowedRedirect.includes(request.method)) ||
-            (status === 302 && allowedRedirect.includes(request.method)) ||
-            (status === 303 && request.method === "POST") ||
-            status === 307) &&
-        currentRetries < maxRetries) {
-        const url = new URL(locationHeader, request.url);
-        request.url = url.toString();
-        // POST request with Status code 303 should be converted into a
-        // redirected GET request if the redirect url is present in the location header
-        if (status === 303) {
-            request.method = "GET";
-            request.headers.delete("Content-Length");
-            delete request.body;
-        }
-        request.headers.delete("Authorization");
-        const res = await next(request);
-        return handleRedirect(next, res, maxRetries, currentRetries + 1);
-    }
-    return response;
+    return (0, policies_1.redirectPolicy)(options);
 }
 //# sourceMappingURL=redirectPolicy.js.map
 
@@ -109963,107 +110170,18 @@ async function handleRedirect(next, response, maxRetries, currentRetries = 0) {
 // Licensed under the MIT License.
 Object.defineProperty(exports, "__esModule", ({ value: true }));
 exports.retryPolicy = retryPolicy;
-const helpers_js_1 = __nccwpck_require__(23034);
 const logger_1 = __nccwpck_require__(26515);
-const abort_controller_1 = __nccwpck_require__(93287);
 const constants_js_1 = __nccwpck_require__(66427);
+const policies_1 = __nccwpck_require__(44960);
 const retryPolicyLogger = (0, logger_1.createClientLogger)("core-rest-pipeline retryPolicy");
-/**
- * The programmatic identifier of the retryPolicy.
- */
-const retryPolicyName = "retryPolicy";
 /**
  * retryPolicy is a generic policy to enable retrying requests when certain conditions are met
  */
 function retryPolicy(strategies, options = { maxRetries: constants_js_1.DEFAULT_RETRY_POLICY_COUNT }) {
-    const logger = options.logger || retryPolicyLogger;
-    return {
-        name: retryPolicyName,
-        async sendRequest(request, next) {
-            var _a, _b;
-            let response;
-            let responseError;
-            let retryCount = -1;
-            retryRequest: while (true) {
-                retryCount += 1;
-                response = undefined;
-                responseError = undefined;
-                try {
-                    logger.info(`Retry ${retryCount}: Attempting to send request`, request.requestId);
-                    response = await next(request);
-                    logger.info(`Retry ${retryCount}: Received a response from request`, request.requestId);
-                }
-                catch (e) {
-                    logger.error(`Retry ${retryCount}: Received an error from request`, request.requestId);
-                    // RestErrors are valid targets for the retry strategies.
-                    // If none of the retry strategies can work with them, they will be thrown later in this policy.
-                    // If the received error is not a RestError, it is immediately thrown.
-                    responseError = e;
-                    if (!e || responseError.name !== "RestError") {
-                        throw e;
-                    }
-                    response = responseError.response;
-                }
-                if ((_a = request.abortSignal) === null || _a === void 0 ? void 0 : _a.aborted) {
-                    logger.error(`Retry ${retryCount}: Request aborted.`);
-                    const abortError = new abort_controller_1.AbortError();
-                    throw abortError;
-                }
-                if (retryCount >= ((_b = options.maxRetries) !== null && _b !== void 0 ? _b : constants_js_1.DEFAULT_RETRY_POLICY_COUNT)) {
-                    logger.info(`Retry ${retryCount}: Maximum retries reached. Returning the last received response, or throwing the last received error.`);
-                    if (responseError) {
-                        throw responseError;
-                    }
-                    else if (response) {
-                        return response;
-                    }
-                    else {
-                        throw new Error("Maximum retries reached with no response or error to throw");
-                    }
-                }
-                logger.info(`Retry ${retryCount}: Processing ${strategies.length} retry strategies.`);
-                strategiesLoop: for (const strategy of strategies) {
-                    const strategyLogger = strategy.logger || retryPolicyLogger;
-                    strategyLogger.info(`Retry ${retryCount}: Processing retry strategy ${strategy.name}.`);
-                    const modifiers = strategy.retry({
-                        retryCount,
-                        response,
-                        responseError,
-                    });
-                    if (modifiers.skipStrategy) {
-                        strategyLogger.info(`Retry ${retryCount}: Skipped.`);
-                        continue strategiesLoop;
-                    }
-                    const { errorToThrow, retryAfterInMs, redirectTo } = modifiers;
-                    if (errorToThrow) {
-                        strategyLogger.error(`Retry ${retryCount}: Retry strategy ${strategy.name} throws error:`, errorToThrow);
-                        throw errorToThrow;
-                    }
-                    if (retryAfterInMs || retryAfterInMs === 0) {
-                        strategyLogger.info(`Retry ${retryCount}: Retry strategy ${strategy.name} retries after ${retryAfterInMs}`);
-                        await (0, helpers_js_1.delay)(retryAfterInMs, undefined, { abortSignal: request.abortSignal });
-                        continue retryRequest;
-                    }
-                    if (redirectTo) {
-                        strategyLogger.info(`Retry ${retryCount}: Retry strategy ${strategy.name} redirects to ${redirectTo}`);
-                        request.url = redirectTo;
-                        continue retryRequest;
-                    }
-                }
-                if (responseError) {
-                    logger.info(`None of the retry strategies could work with the received error. Throwing it.`);
-                    throw responseError;
-                }
-                if (response) {
-                    logger.info(`None of the retry strategies could work with the received response. Returning it.`);
-                    return response;
-                }
-                // If all the retries skip and there's no response,
-                // we're still in the retry loop, so a new request will be sent
-                // until `maxRetries` is reached.
-            }
-        },
-    };
+    // Cast is required since the TSP runtime retry strategy type is slightly different
+    // very deep down (using real AbortSignal vs. AbortSignalLike in RestError).
+    // In practice the difference doesn't actually matter.
+    return (0, policies_1.retryPolicy)(strategies, Object.assign({ logger: retryPolicyLogger }, options));
 }
 //# sourceMappingURL=retryPolicy.js.map
 
@@ -110114,13 +110232,11 @@ function setClientRequestIdPolicy(requestIdHeaderName = "x-ms-client-request-id"
 Object.defineProperty(exports, "__esModule", ({ value: true }));
 exports.systemErrorRetryPolicyName = void 0;
 exports.systemErrorRetryPolicy = systemErrorRetryPolicy;
-const exponentialRetryStrategy_js_1 = __nccwpck_require__(50002);
-const retryPolicy_js_1 = __nccwpck_require__(56085);
-const constants_js_1 = __nccwpck_require__(66427);
+const policies_1 = __nccwpck_require__(44960);
 /**
  * Name of the {@link systemErrorRetryPolicy}
  */
-exports.systemErrorRetryPolicyName = "systemErrorRetryPolicy";
+exports.systemErrorRetryPolicyName = policies_1.systemErrorRetryPolicyName;
 /**
  * A retry policy that specifically seeks to handle errors in the
  * underlying transport layer (e.g. DNS lookup failures) rather than
@@ -110128,15 +110244,7 @@ exports.systemErrorRetryPolicyName = "systemErrorRetryPolicy";
  * @param options - Options that customize the policy.
  */
 function systemErrorRetryPolicy(options = {}) {
-    var _a;
-    return {
-        name: exports.systemErrorRetryPolicyName,
-        sendRequest: (0, retryPolicy_js_1.retryPolicy)([
-            (0, exponentialRetryStrategy_js_1.exponentialRetryStrategy)(Object.assign(Object.assign({}, options), { ignoreHttpStatusCodes: true })),
-        ], {
-            maxRetries: (_a = options.maxRetries) !== null && _a !== void 0 ? _a : constants_js_1.DEFAULT_RETRY_POLICY_COUNT,
-        }).sendRequest,
-    };
+    return (0, policies_1.systemErrorRetryPolicy)(options);
 }
 //# sourceMappingURL=systemErrorRetryPolicy.js.map
 
@@ -110152,38 +110260,30 @@ function systemErrorRetryPolicy(options = {}) {
 Object.defineProperty(exports, "__esModule", ({ value: true }));
 exports.throttlingRetryPolicyName = void 0;
 exports.throttlingRetryPolicy = throttlingRetryPolicy;
-const throttlingRetryStrategy_js_1 = __nccwpck_require__(97084);
-const retryPolicy_js_1 = __nccwpck_require__(56085);
-const constants_js_1 = __nccwpck_require__(66427);
+const policies_1 = __nccwpck_require__(44960);
 /**
  * Name of the {@link throttlingRetryPolicy}
  */
-exports.throttlingRetryPolicyName = "throttlingRetryPolicy";
+exports.throttlingRetryPolicyName = policies_1.throttlingRetryPolicyName;
 /**
  * A policy that retries when the server sends a 429 response with a Retry-After header.
  *
  * To learn more, please refer to
- * https://docs.microsoft.com/en-us/azure/azure-resource-manager/resource-manager-request-limits,
- * https://docs.microsoft.com/en-us/azure/azure-subscription-service-limits and
- * https://docs.microsoft.com/en-us/azure/virtual-machines/troubleshooting/troubleshooting-throttling-errors
+ * https://learn.microsoft.com/azure/azure-resource-manager/resource-manager-request-limits,
+ * https://learn.microsoft.com/azure/azure-subscription-service-limits and
+ * https://learn.microsoft.com/azure/virtual-machines/troubleshooting/troubleshooting-throttling-errors
  *
  * @param options - Options that configure retry logic.
  */
 function throttlingRetryPolicy(options = {}) {
-    var _a;
-    return {
-        name: exports.throttlingRetryPolicyName,
-        sendRequest: (0, retryPolicy_js_1.retryPolicy)([(0, throttlingRetryStrategy_js_1.throttlingRetryStrategy)()], {
-            maxRetries: (_a = options.maxRetries) !== null && _a !== void 0 ? _a : constants_js_1.DEFAULT_RETRY_POLICY_COUNT,
-        }).sendRequest,
-    };
+    return (0, policies_1.throttlingRetryPolicy)(options);
 }
 //# sourceMappingURL=throttlingRetryPolicy.js.map
 
 /***/ }),
 
 /***/ 75798:
-/***/ ((__unused_webpack_module, exports) => {
+/***/ ((__unused_webpack_module, exports, __nccwpck_require__) => {
 
 "use strict";
 
@@ -110192,24 +110292,16 @@ function throttlingRetryPolicy(options = {}) {
 Object.defineProperty(exports, "__esModule", ({ value: true }));
 exports.tlsPolicyName = void 0;
 exports.tlsPolicy = tlsPolicy;
+const policies_1 = __nccwpck_require__(44960);
 /**
  * Name of the TLS Policy
  */
-exports.tlsPolicyName = "tlsPolicy";
+exports.tlsPolicyName = policies_1.tlsPolicyName;
 /**
  * Gets a pipeline policy that adds the client certificate to the HttpClient agent for authentication.
  */
 function tlsPolicy(tlsSettings) {
-    return {
-        name: exports.tlsPolicyName,
-        sendRequest: async (req, next) => {
-            // Users may define a request tlsSettings, honor those over the client level one
-            if (!req.tlsSettings) {
-                req.tlsSettings = tlsSettings;
-            }
-            return next(req);
-        },
-    };
+    return (0, policies_1.tlsPolicy)(tlsSettings);
 }
 //# sourceMappingURL=tlsPolicy.js.map
 
@@ -110231,7 +110323,7 @@ const userAgent_js_1 = __nccwpck_require__(28431);
 const log_js_1 = __nccwpck_require__(80544);
 const core_util_1 = __nccwpck_require__(87779);
 const restError_js_1 = __nccwpck_require__(8666);
-const sanitizer_js_1 = __nccwpck_require__(35204);
+const util_1 = __nccwpck_require__(95750);
 /**
  * The programmatic identifier of the tracingPolicy.
  */
@@ -110244,7 +110336,7 @@ exports.tracingPolicyName = "tracingPolicy";
  */
 function tracingPolicy(options = {}) {
     const userAgentPromise = (0, userAgent_js_1.getUserAgentValue)(options.userAgentPrefix);
-    const sanitizer = new sanitizer_js_1.Sanitizer({
+    const sanitizer = new util_1.Sanitizer({
         additionalAllowedQueryParameters: options.additionalAllowedQueryParameters,
     });
     const tracingClient = tryCreateTracingClient();
@@ -110395,6 +110487,47 @@ function userAgentPolicy(options = {}) {
 
 /***/ }),
 
+/***/ 37466:
+/***/ ((__unused_webpack_module, exports, __nccwpck_require__) => {
+
+"use strict";
+
+// Copyright (c) Microsoft Corporation.
+// Licensed under the MIT License.
+Object.defineProperty(exports, "__esModule", ({ value: true }));
+exports.wrapAbortSignalLikePolicyName = void 0;
+exports.wrapAbortSignalLikePolicy = wrapAbortSignalLikePolicy;
+const wrapAbortSignal_js_1 = __nccwpck_require__(91297);
+exports.wrapAbortSignalLikePolicyName = "wrapAbortSignalLikePolicy";
+/**
+ * Policy that ensure that any AbortSignalLike is wrapped in a native AbortSignal for processing by the pipeline.
+ * Since the ts-http-runtime expects a native AbortSignal, this policy is used to ensure that any AbortSignalLike is wrapped in a native AbortSignal.
+ *
+ * @returns - created policy
+ */
+function wrapAbortSignalLikePolicy() {
+    return {
+        name: exports.wrapAbortSignalLikePolicyName,
+        sendRequest: async (request, next) => {
+            if (!request.abortSignal) {
+                return next(request);
+            }
+            const { abortSignal, cleanup } = (0, wrapAbortSignal_js_1.wrapAbortSignalLike)(request.abortSignal);
+            // eslint-disable-next-line no-param-reassign
+            request.abortSignal = abortSignal;
+            try {
+                return await next(request);
+            }
+            finally {
+                cleanup === null || cleanup === void 0 ? void 0 : cleanup();
+            }
+        },
+    };
+}
+//# sourceMappingURL=wrapAbortSignalLikePolicy.js.map
+
+/***/ }),
+
 /***/ 8666:
 /***/ ((__unused_webpack_module, exports, __nccwpck_require__) => {
 
@@ -110405,318 +110538,20 @@ function userAgentPolicy(options = {}) {
 Object.defineProperty(exports, "__esModule", ({ value: true }));
 exports.RestError = void 0;
 exports.isRestError = isRestError;
-const core_util_1 = __nccwpck_require__(87779);
-const inspect_js_1 = __nccwpck_require__(90995);
-const sanitizer_js_1 = __nccwpck_require__(35204);
-const errorSanitizer = new sanitizer_js_1.Sanitizer();
+const ts_http_runtime_1 = __nccwpck_require__(41958);
 /**
  * A custom error type for failed pipeline requests.
  */
-class RestError extends Error {
-    constructor(message, options = {}) {
-        super(message);
-        this.name = "RestError";
-        this.code = options.code;
-        this.statusCode = options.statusCode;
-        // The request and response may contain sensitive information in the headers or body.
-        // To help prevent this sensitive information being accidentally logged, the request and response
-        // properties are marked as non-enumerable here. This prevents them showing up in the output of
-        // JSON.stringify and console.log.
-        Object.defineProperty(this, "request", { value: options.request, enumerable: false });
-        Object.defineProperty(this, "response", { value: options.response, enumerable: false });
-        Object.setPrototypeOf(this, RestError.prototype);
-    }
-    /**
-     * Logging method for util.inspect in Node
-     */
-    [inspect_js_1.custom]() {
-        // Extract non-enumerable properties and add them back. This is OK since in this output the request and
-        // response get sanitized.
-        return `RestError: ${this.message} \n ${errorSanitizer.sanitize(Object.assign(Object.assign({}, this), { request: this.request, response: this.response }))}`;
-    }
-}
-exports.RestError = RestError;
-/**
- * Something went wrong when making the request.
- * This means the actual request failed for some reason,
- * such as a DNS issue or the connection being lost.
- */
-RestError.REQUEST_SEND_ERROR = "REQUEST_SEND_ERROR";
-/**
- * This means that parsing the response from the server failed.
- * It may have been malformed.
- */
-RestError.PARSE_ERROR = "PARSE_ERROR";
+// eslint-disable-next-line @typescript-eslint/no-redeclare
+exports.RestError = ts_http_runtime_1.RestError;
 /**
  * Typeguard for RestError
  * @param e - Something caught by a catch clause.
  */
 function isRestError(e) {
-    if (e instanceof RestError) {
-        return true;
-    }
-    return (0, core_util_1.isError)(e) && e.name === "RestError";
+    return (0, ts_http_runtime_1.isRestError)(e);
 }
 //# sourceMappingURL=restError.js.map
-
-/***/ }),
-
-/***/ 50002:
-/***/ ((__unused_webpack_module, exports, __nccwpck_require__) => {
-
-"use strict";
-
-// Copyright (c) Microsoft Corporation.
-// Licensed under the MIT License.
-Object.defineProperty(exports, "__esModule", ({ value: true }));
-exports.exponentialRetryStrategy = exponentialRetryStrategy;
-exports.isExponentialRetryResponse = isExponentialRetryResponse;
-exports.isSystemError = isSystemError;
-const core_util_1 = __nccwpck_require__(87779);
-const throttlingRetryStrategy_js_1 = __nccwpck_require__(97084);
-// intervals are in milliseconds
-const DEFAULT_CLIENT_RETRY_INTERVAL = 1000;
-const DEFAULT_CLIENT_MAX_RETRY_INTERVAL = 1000 * 64;
-/**
- * A retry strategy that retries with an exponentially increasing delay in these two cases:
- * - When there are errors in the underlying transport layer (e.g. DNS lookup failures).
- * - Or otherwise if the outgoing request fails (408, greater or equal than 500, except for 501 and 505).
- */
-function exponentialRetryStrategy(options = {}) {
-    var _a, _b;
-    const retryInterval = (_a = options.retryDelayInMs) !== null && _a !== void 0 ? _a : DEFAULT_CLIENT_RETRY_INTERVAL;
-    const maxRetryInterval = (_b = options.maxRetryDelayInMs) !== null && _b !== void 0 ? _b : DEFAULT_CLIENT_MAX_RETRY_INTERVAL;
-    return {
-        name: "exponentialRetryStrategy",
-        retry({ retryCount, response, responseError }) {
-            const matchedSystemError = isSystemError(responseError);
-            const ignoreSystemErrors = matchedSystemError && options.ignoreSystemErrors;
-            const isExponential = isExponentialRetryResponse(response);
-            const ignoreExponentialResponse = isExponential && options.ignoreHttpStatusCodes;
-            const unknownResponse = response && ((0, throttlingRetryStrategy_js_1.isThrottlingRetryResponse)(response) || !isExponential);
-            if (unknownResponse || ignoreExponentialResponse || ignoreSystemErrors) {
-                return { skipStrategy: true };
-            }
-            if (responseError && !matchedSystemError && !isExponential) {
-                return { errorToThrow: responseError };
-            }
-            return (0, core_util_1.calculateRetryDelay)(retryCount, {
-                retryDelayInMs: retryInterval,
-                maxRetryDelayInMs: maxRetryInterval,
-            });
-        },
-    };
-}
-/**
- * A response is a retry response if it has status codes:
- * - 408, or
- * - Greater or equal than 500, except for 501 and 505.
- */
-function isExponentialRetryResponse(response) {
-    return Boolean(response &&
-        response.status !== undefined &&
-        (response.status >= 500 || response.status === 408) &&
-        response.status !== 501 &&
-        response.status !== 505);
-}
-/**
- * Determines whether an error from a pipeline response was triggered in the network layer.
- */
-function isSystemError(err) {
-    if (!err) {
-        return false;
-    }
-    return (err.code === "ETIMEDOUT" ||
-        err.code === "ESOCKETTIMEDOUT" ||
-        err.code === "ECONNREFUSED" ||
-        err.code === "ECONNRESET" ||
-        err.code === "ENOENT" ||
-        err.code === "ENOTFOUND");
-}
-//# sourceMappingURL=exponentialRetryStrategy.js.map
-
-/***/ }),
-
-/***/ 97084:
-/***/ ((__unused_webpack_module, exports, __nccwpck_require__) => {
-
-"use strict";
-
-// Copyright (c) Microsoft Corporation.
-// Licensed under the MIT License.
-Object.defineProperty(exports, "__esModule", ({ value: true }));
-exports.isThrottlingRetryResponse = isThrottlingRetryResponse;
-exports.throttlingRetryStrategy = throttlingRetryStrategy;
-const helpers_js_1 = __nccwpck_require__(23034);
-/**
- * The header that comes back from Azure services representing
- * the amount of time (minimum) to wait to retry (in seconds or timestamp after which we can retry).
- */
-const RetryAfterHeader = "Retry-After";
-/**
- * The headers that come back from Azure services representing
- * the amount of time (minimum) to wait to retry.
- *
- * "retry-after-ms", "x-ms-retry-after-ms" : milliseconds
- * "Retry-After" : seconds or timestamp
- */
-const AllRetryAfterHeaders = ["retry-after-ms", "x-ms-retry-after-ms", RetryAfterHeader];
-/**
- * A response is a throttling retry response if it has a throttling status code (429 or 503),
- * as long as one of the [ "Retry-After" or "retry-after-ms" or "x-ms-retry-after-ms" ] headers has a valid value.
- *
- * Returns the `retryAfterInMs` value if the response is a throttling retry response.
- * If not throttling retry response, returns `undefined`.
- *
- * @internal
- */
-function getRetryAfterInMs(response) {
-    if (!(response && [429, 503].includes(response.status)))
-        return undefined;
-    try {
-        // Headers: "retry-after-ms", "x-ms-retry-after-ms", "Retry-After"
-        for (const header of AllRetryAfterHeaders) {
-            const retryAfterValue = (0, helpers_js_1.parseHeaderValueAsNumber)(response, header);
-            if (retryAfterValue === 0 || retryAfterValue) {
-                // "Retry-After" header ==> seconds
-                // "retry-after-ms", "x-ms-retry-after-ms" headers ==> milli-seconds
-                const multiplyingFactor = header === RetryAfterHeader ? 1000 : 1;
-                return retryAfterValue * multiplyingFactor; // in milli-seconds
-            }
-        }
-        // RetryAfterHeader ("Retry-After") has a special case where it might be formatted as a date instead of a number of seconds
-        const retryAfterHeader = response.headers.get(RetryAfterHeader);
-        if (!retryAfterHeader)
-            return;
-        const date = Date.parse(retryAfterHeader);
-        const diff = date - Date.now();
-        // negative diff would mean a date in the past, so retry asap with 0 milliseconds
-        return Number.isFinite(diff) ? Math.max(0, diff) : undefined;
-    }
-    catch (_a) {
-        return undefined;
-    }
-}
-/**
- * A response is a retry response if it has a throttling status code (429 or 503),
- * as long as one of the [ "Retry-After" or "retry-after-ms" or "x-ms-retry-after-ms" ] headers has a valid value.
- */
-function isThrottlingRetryResponse(response) {
-    return Number.isFinite(getRetryAfterInMs(response));
-}
-function throttlingRetryStrategy() {
-    return {
-        name: "throttlingRetryStrategy",
-        retry({ response }) {
-            const retryAfterInMs = getRetryAfterInMs(response);
-            if (!Number.isFinite(retryAfterInMs)) {
-                return { skipStrategy: true };
-            }
-            return {
-                retryAfterInMs,
-            };
-        },
-    };
-}
-//# sourceMappingURL=throttlingRetryStrategy.js.map
-
-/***/ }),
-
-/***/ 62471:
-/***/ ((__unused_webpack_module, exports, __nccwpck_require__) => {
-
-"use strict";
-
-// Copyright (c) Microsoft Corporation.
-// Licensed under the MIT License.
-Object.defineProperty(exports, "__esModule", ({ value: true }));
-exports.concat = concat;
-const tslib_1 = __nccwpck_require__(61860);
-const node_stream_1 = __nccwpck_require__(57075);
-const typeGuards_js_1 = __nccwpck_require__(22621);
-const file_js_1 = __nccwpck_require__(97073);
-function streamAsyncIterator() {
-    return tslib_1.__asyncGenerator(this, arguments, function* streamAsyncIterator_1() {
-        const reader = this.getReader();
-        try {
-            while (true) {
-                const { done, value } = yield tslib_1.__await(reader.read());
-                if (done) {
-                    return yield tslib_1.__await(void 0);
-                }
-                yield yield tslib_1.__await(value);
-            }
-        }
-        finally {
-            reader.releaseLock();
-        }
-    });
-}
-function makeAsyncIterable(webStream) {
-    if (!webStream[Symbol.asyncIterator]) {
-        webStream[Symbol.asyncIterator] = streamAsyncIterator.bind(webStream);
-    }
-    if (!webStream.values) {
-        webStream.values = streamAsyncIterator.bind(webStream);
-    }
-}
-function ensureNodeStream(stream) {
-    if (stream instanceof ReadableStream) {
-        makeAsyncIterable(stream);
-        return node_stream_1.Readable.fromWeb(stream);
-    }
-    else {
-        return stream;
-    }
-}
-function toStream(source) {
-    if (source instanceof Uint8Array) {
-        return node_stream_1.Readable.from(Buffer.from(source));
-    }
-    else if ((0, typeGuards_js_1.isBlob)(source)) {
-        return toStream((0, file_js_1.getRawContent)(source));
-    }
-    else {
-        return ensureNodeStream(source);
-    }
-}
-/**
- * Utility function that concatenates a set of binary inputs into one combined output.
- *
- * @param sources - array of sources for the concatenation
- * @returns - in Node, a (() =\> NodeJS.ReadableStream) which, when read, produces a concatenation of all the inputs.
- *           In browser, returns a `Blob` representing all the concatenated inputs.
- *
- * @internal
- */
-async function concat(sources) {
-    return function () {
-        const streams = sources.map((x) => (typeof x === "function" ? x() : x)).map(toStream);
-        return node_stream_1.Readable.from((function () {
-            return tslib_1.__asyncGenerator(this, arguments, function* () {
-                var _a, e_1, _b, _c;
-                for (const stream of streams) {
-                    try {
-                        for (var _d = true, stream_1 = (e_1 = void 0, tslib_1.__asyncValues(stream)), stream_1_1; stream_1_1 = yield tslib_1.__await(stream_1.next()), _a = stream_1_1.done, !_a; _d = true) {
-                            _c = stream_1_1.value;
-                            _d = false;
-                            const chunk = _c;
-                            yield yield tslib_1.__await(chunk);
-                        }
-                    }
-                    catch (e_1_1) { e_1 = { error: e_1_1 }; }
-                    finally {
-                        try {
-                            if (!_d && !_a && (_b = stream_1.return)) yield tslib_1.__await(_b.call(stream_1));
-                        }
-                        finally { if (e_1) throw e_1.error; }
-                    }
-                }
-            });
-        })());
-    };
-}
-//# sourceMappingURL=concat.js.map
 
 /***/ }),
 
@@ -110728,11 +110563,14 @@ async function concat(sources) {
 // Copyright (c) Microsoft Corporation.
 // Licensed under the MIT License.
 Object.defineProperty(exports, "__esModule", ({ value: true }));
+exports.hasRawContent = hasRawContent;
 exports.getRawContent = getRawContent;
 exports.createFileFromStream = createFileFromStream;
 exports.createFile = createFile;
 const core_util_1 = __nccwpck_require__(87779);
-const typeGuards_js_1 = __nccwpck_require__(22621);
+function isNodeReadableStream(x) {
+    return Boolean(x && typeof x["pipe"] === "function");
+}
 const unimplementedMethods = {
     arrayBuffer: () => {
         throw new Error("Not implemented");
@@ -110762,13 +110600,16 @@ const unimplementedMethods = {
  * @internal
  */
 const rawContent = Symbol("rawContent");
+/**
+ * Type guard to check if a given object is a blob-like object with a raw content property.
+ */
 function hasRawContent(x) {
     return typeof x[rawContent] === "function";
 }
 /**
  * Extract the raw content from a given blob-like object. If the input was created using createFile
  * or createFileFromStream, the exact content passed into createFile/createFileFromStream will be used.
- * For true instances of Blob and File, returns the blob's content as a Web ReadableStream<Uint8Array>.
+ * For true instances of Blob and File, returns the actual blob.
  *
  * @internal
  */
@@ -110777,7 +110618,7 @@ function getRawContent(blob) {
         return blob[rawContent]();
     }
     else {
-        return blob.stream();
+        return blob;
     }
 }
 /**
@@ -110801,7 +110642,7 @@ function createFileFromStream(stream, name, options = {}) {
     var _a, _b, _c, _d;
     return Object.assign(Object.assign({}, unimplementedMethods), { type: (_a = options.type) !== null && _a !== void 0 ? _a : "", lastModified: (_b = options.lastModified) !== null && _b !== void 0 ? _b : new Date().getTime(), webkitRelativePath: (_c = options.webkitRelativePath) !== null && _c !== void 0 ? _c : "", size: (_d = options.size) !== null && _d !== void 0 ? _d : -1, name, stream: () => {
             const s = stream();
-            if ((0, typeGuards_js_1.isNodeReadableStream)(s)) {
+            if (isNodeReadableStream(s)) {
                 throw new Error("Not supported: a Node stream was provided as input to createFileFromStream.");
             }
             return s;
@@ -110831,240 +110672,6 @@ function createFile(content, name, options = {}) {
 
 /***/ }),
 
-/***/ 23034:
-/***/ ((__unused_webpack_module, exports, __nccwpck_require__) => {
-
-"use strict";
-
-// Copyright (c) Microsoft Corporation.
-// Licensed under the MIT License.
-Object.defineProperty(exports, "__esModule", ({ value: true }));
-exports.delay = delay;
-exports.parseHeaderValueAsNumber = parseHeaderValueAsNumber;
-const abort_controller_1 = __nccwpck_require__(93287);
-const StandardAbortMessage = "The operation was aborted.";
-/**
- * A wrapper for setTimeout that resolves a promise after delayInMs milliseconds.
- * @param delayInMs - The number of milliseconds to be delayed.
- * @param value - The value to be resolved with after a timeout of t milliseconds.
- * @param options - The options for delay - currently abort options
- *                  - abortSignal - The abortSignal associated with containing operation.
- *                  - abortErrorMsg - The abort error message associated with containing operation.
- * @returns Resolved promise
- */
-function delay(delayInMs, value, options) {
-    return new Promise((resolve, reject) => {
-        let timer = undefined;
-        let onAborted = undefined;
-        const rejectOnAbort = () => {
-            return reject(new abort_controller_1.AbortError((options === null || options === void 0 ? void 0 : options.abortErrorMsg) ? options === null || options === void 0 ? void 0 : options.abortErrorMsg : StandardAbortMessage));
-        };
-        const removeListeners = () => {
-            if ((options === null || options === void 0 ? void 0 : options.abortSignal) && onAborted) {
-                options.abortSignal.removeEventListener("abort", onAborted);
-            }
-        };
-        onAborted = () => {
-            if (timer) {
-                clearTimeout(timer);
-            }
-            removeListeners();
-            return rejectOnAbort();
-        };
-        if ((options === null || options === void 0 ? void 0 : options.abortSignal) && options.abortSignal.aborted) {
-            return rejectOnAbort();
-        }
-        timer = setTimeout(() => {
-            removeListeners();
-            resolve(value);
-        }, delayInMs);
-        if (options === null || options === void 0 ? void 0 : options.abortSignal) {
-            options.abortSignal.addEventListener("abort", onAborted);
-        }
-    });
-}
-/**
- * @internal
- * @returns the parsed value or undefined if the parsed value is invalid.
- */
-function parseHeaderValueAsNumber(response, headerName) {
-    const value = response.headers.get(headerName);
-    if (!value)
-        return;
-    const valueAsNum = Number(value);
-    if (Number.isNaN(valueAsNum))
-        return;
-    return valueAsNum;
-}
-//# sourceMappingURL=helpers.js.map
-
-/***/ }),
-
-/***/ 90995:
-/***/ ((__unused_webpack_module, exports, __nccwpck_require__) => {
-
-"use strict";
-
-// Copyright (c) Microsoft Corporation.
-// Licensed under the MIT License.
-Object.defineProperty(exports, "__esModule", ({ value: true }));
-exports.custom = void 0;
-const node_util_1 = __nccwpck_require__(57975);
-exports.custom = node_util_1.inspect.custom;
-//# sourceMappingURL=inspect.js.map
-
-/***/ }),
-
-/***/ 35204:
-/***/ ((__unused_webpack_module, exports, __nccwpck_require__) => {
-
-"use strict";
-
-// Copyright (c) Microsoft Corporation.
-// Licensed under the MIT License.
-Object.defineProperty(exports, "__esModule", ({ value: true }));
-exports.Sanitizer = void 0;
-const core_util_1 = __nccwpck_require__(87779);
-const RedactedString = "REDACTED";
-// Make sure this list is up-to-date with the one under core/logger/Readme#Keyconcepts
-const defaultAllowedHeaderNames = [
-    "x-ms-client-request-id",
-    "x-ms-return-client-request-id",
-    "x-ms-useragent",
-    "x-ms-correlation-request-id",
-    "x-ms-request-id",
-    "client-request-id",
-    "ms-cv",
-    "return-client-request-id",
-    "traceparent",
-    "Access-Control-Allow-Credentials",
-    "Access-Control-Allow-Headers",
-    "Access-Control-Allow-Methods",
-    "Access-Control-Allow-Origin",
-    "Access-Control-Expose-Headers",
-    "Access-Control-Max-Age",
-    "Access-Control-Request-Headers",
-    "Access-Control-Request-Method",
-    "Origin",
-    "Accept",
-    "Accept-Encoding",
-    "Cache-Control",
-    "Connection",
-    "Content-Length",
-    "Content-Type",
-    "Date",
-    "ETag",
-    "Expires",
-    "If-Match",
-    "If-Modified-Since",
-    "If-None-Match",
-    "If-Unmodified-Since",
-    "Last-Modified",
-    "Pragma",
-    "Request-Id",
-    "Retry-After",
-    "Server",
-    "Transfer-Encoding",
-    "User-Agent",
-    "WWW-Authenticate",
-];
-const defaultAllowedQueryParameters = ["api-version"];
-/**
- * @internal
- */
-class Sanitizer {
-    constructor({ additionalAllowedHeaderNames: allowedHeaderNames = [], additionalAllowedQueryParameters: allowedQueryParameters = [], } = {}) {
-        allowedHeaderNames = defaultAllowedHeaderNames.concat(allowedHeaderNames);
-        allowedQueryParameters = defaultAllowedQueryParameters.concat(allowedQueryParameters);
-        this.allowedHeaderNames = new Set(allowedHeaderNames.map((n) => n.toLowerCase()));
-        this.allowedQueryParameters = new Set(allowedQueryParameters.map((p) => p.toLowerCase()));
-    }
-    sanitize(obj) {
-        const seen = new Set();
-        return JSON.stringify(obj, (key, value) => {
-            // Ensure Errors include their interesting non-enumerable members
-            if (value instanceof Error) {
-                return Object.assign(Object.assign({}, value), { name: value.name, message: value.message });
-            }
-            if (key === "headers") {
-                return this.sanitizeHeaders(value);
-            }
-            else if (key === "url") {
-                return this.sanitizeUrl(value);
-            }
-            else if (key === "query") {
-                return this.sanitizeQuery(value);
-            }
-            else if (key === "body") {
-                // Don't log the request body
-                return undefined;
-            }
-            else if (key === "response") {
-                // Don't log response again
-                return undefined;
-            }
-            else if (key === "operationSpec") {
-                // When using sendOperationRequest, the request carries a massive
-                // field with the autorest spec. No need to log it.
-                return undefined;
-            }
-            else if (Array.isArray(value) || (0, core_util_1.isObject)(value)) {
-                if (seen.has(value)) {
-                    return "[Circular]";
-                }
-                seen.add(value);
-            }
-            return value;
-        }, 2);
-    }
-    sanitizeUrl(value) {
-        if (typeof value !== "string" || value === null || value === "") {
-            return value;
-        }
-        const url = new URL(value);
-        if (!url.search) {
-            return value;
-        }
-        for (const [key] of url.searchParams) {
-            if (!this.allowedQueryParameters.has(key.toLowerCase())) {
-                url.searchParams.set(key, RedactedString);
-            }
-        }
-        return url.toString();
-    }
-    sanitizeHeaders(obj) {
-        const sanitized = {};
-        for (const key of Object.keys(obj)) {
-            if (this.allowedHeaderNames.has(key.toLowerCase())) {
-                sanitized[key] = obj[key];
-            }
-            else {
-                sanitized[key] = RedactedString;
-            }
-        }
-        return sanitized;
-    }
-    sanitizeQuery(value) {
-        if (typeof value !== "object" || value === null) {
-            return value;
-        }
-        const sanitized = {};
-        for (const k of Object.keys(value)) {
-            if (this.allowedQueryParameters.has(k.toLowerCase())) {
-                sanitized[k] = value[k];
-            }
-            else {
-                sanitized[k] = RedactedString;
-            }
-        }
-        return sanitized;
-    }
-}
-exports.Sanitizer = Sanitizer;
-//# sourceMappingURL=sanitizer.js.map
-
-/***/ }),
-
 /***/ 39202:
 /***/ ((__unused_webpack_module, exports, __nccwpck_require__) => {
 
@@ -111075,7 +110682,7 @@ exports.Sanitizer = Sanitizer;
 Object.defineProperty(exports, "__esModule", ({ value: true }));
 exports.DEFAULT_CYCLER_OPTIONS = void 0;
 exports.createTokenCycler = createTokenCycler;
-const helpers_js_1 = __nccwpck_require__(23034);
+const core_util_1 = __nccwpck_require__(87779);
 // Default options for the cycler if none are provided
 exports.DEFAULT_CYCLER_OPTIONS = {
     forcedRefreshWindowInMs: 1000, // Force waiting for a refresh 1s before the token expires
@@ -111115,7 +110722,7 @@ async function beginRefresh(getAccessToken, retryIntervalInMs, refreshTimeout) {
     }
     let token = await tryGetAccessToken();
     while (token === null) {
-        await (0, helpers_js_1.delay)(retryIntervalInMs);
+        await (0, core_util_1.delay)(retryIntervalInMs);
         token = await tryGetAccessToken();
     }
     return token;
@@ -111238,36 +110845,6 @@ function createTokenCycler(credential, tokenCyclerOptions) {
 
 /***/ }),
 
-/***/ 22621:
-/***/ ((__unused_webpack_module, exports) => {
-
-"use strict";
-
-// Copyright (c) Microsoft Corporation.
-// Licensed under the MIT License.
-Object.defineProperty(exports, "__esModule", ({ value: true }));
-exports.isNodeReadableStream = isNodeReadableStream;
-exports.isWebReadableStream = isWebReadableStream;
-exports.isReadableStream = isReadableStream;
-exports.isBlob = isBlob;
-function isNodeReadableStream(x) {
-    return Boolean(x && typeof x["pipe"] === "function");
-}
-function isWebReadableStream(x) {
-    return Boolean(x &&
-        typeof x.getReader === "function" &&
-        typeof x.tee === "function");
-}
-function isReadableStream(x) {
-    return isNodeReadableStream(x) || isWebReadableStream(x);
-}
-function isBlob(x) {
-    return typeof x.stream === "function";
-}
-//# sourceMappingURL=typeGuards.js.map
-
-/***/ }),
-
 /***/ 28431:
 /***/ ((__unused_webpack_module, exports, __nccwpck_require__) => {
 
@@ -111350,56 +110927,44 @@ async function setPlatformSpecificData(map) {
 
 /***/ }),
 
-/***/ 45455:
+/***/ 91297:
 /***/ ((__unused_webpack_module, exports) => {
 
 "use strict";
 
 // Copyright (c) Microsoft Corporation.
-// Licensed under the MIT license.
+// Licensed under the MIT License.
 Object.defineProperty(exports, "__esModule", ({ value: true }));
-exports.AbortError = void 0;
+exports.wrapAbortSignalLike = wrapAbortSignalLike;
 /**
- * This error is thrown when an asynchronous operation has been aborted.
- * Check for this error by testing the `name` that the name property of the
- * error matches `"AbortError"`.
- *
- * @example
- * ```ts
- * const controller = new AbortController();
- * controller.abort();
- * try {
- *   doAsyncWork(controller.signal)
- * } catch (e) {
- *   if (e.name === 'AbortError') {
- *     // handle abort error here.
- *   }
- * }
- * ```
+ * Creates a native AbortSignal which reflects the state of the provided AbortSignalLike.
+ * If the AbortSignalLike is already a native AbortSignal, it is returned as is.
+ * @param abortSignalLike - The AbortSignalLike to wrap.
+ * @returns - An object containing the native AbortSignal and an optional cleanup function. The cleanup function should be called when the AbortSignal is no longer needed.
  */
-class AbortError extends Error {
-    constructor(message) {
-        super(message);
-        this.name = "AbortError";
+function wrapAbortSignalLike(abortSignalLike) {
+    if (abortSignalLike instanceof AbortSignal) {
+        return { abortSignal: abortSignalLike };
     }
+    if (abortSignalLike.aborted) {
+        return { abortSignal: AbortSignal.abort(abortSignalLike.reason) };
+    }
+    const controller = new AbortController();
+    let needsCleanup = true;
+    function cleanup() {
+        if (needsCleanup) {
+            abortSignalLike.removeEventListener("abort", listener);
+            needsCleanup = false;
+        }
+    }
+    function listener() {
+        controller.abort(abortSignalLike.reason);
+        cleanup();
+    }
+    abortSignalLike.addEventListener("abort", listener);
+    return { abortSignal: controller.signal, cleanup };
 }
-exports.AbortError = AbortError;
-//# sourceMappingURL=AbortError.js.map
-
-/***/ }),
-
-/***/ 93287:
-/***/ ((__unused_webpack_module, exports, __nccwpck_require__) => {
-
-"use strict";
-
-// Copyright (c) Microsoft Corporation.
-// Licensed under the MIT license.
-Object.defineProperty(exports, "__esModule", ({ value: true }));
-exports.AbortError = void 0;
-var AbortError_js_1 = __nccwpck_require__(45455);
-Object.defineProperty(exports, "AbortError", ({ enumerable: true, get: function () { return AbortError_js_1.AbortError; } }));
-//# sourceMappingURL=index.js.map
+//# sourceMappingURL=wrapAbortSignal.js.map
 
 /***/ }),
 
@@ -111691,95 +111256,6 @@ async function cancelablePromiseRace(abortablePromiseBuilders, options) {
 
 /***/ }),
 
-/***/ 2741:
-/***/ ((__unused_webpack_module, exports) => {
-
-"use strict";
-
-// Copyright (c) Microsoft Corporation.
-// Licensed under the MIT License.
-Object.defineProperty(exports, "__esModule", ({ value: true }));
-exports.uint8ArrayToString = uint8ArrayToString;
-exports.stringToUint8Array = stringToUint8Array;
-/**
- * The helper that transforms bytes with specific character encoding into string
- * @param bytes - the uint8array bytes
- * @param format - the format we use to encode the byte
- * @returns a string of the encoded string
- */
-function uint8ArrayToString(bytes, format) {
-    return Buffer.from(bytes).toString(format);
-}
-/**
- * The helper that transforms string to specific character encoded bytes array.
- * @param value - the string to be converted
- * @param format - the format we use to decode the value
- * @returns a uint8array
- */
-function stringToUint8Array(value, format) {
-    return Buffer.from(value, format);
-}
-//# sourceMappingURL=bytesEncoding.js.map
-
-/***/ }),
-
-/***/ 8162:
-/***/ ((__unused_webpack_module, exports) => {
-
-"use strict";
-
-// Copyright (c) Microsoft Corporation.
-// Licensed under the MIT License.
-var _a, _b, _c, _d;
-Object.defineProperty(exports, "__esModule", ({ value: true }));
-exports.isReactNative = exports.isNodeRuntime = exports.isNode = exports.isNodeLike = exports.isBun = exports.isDeno = exports.isWebWorker = exports.isBrowser = void 0;
-/**
- * A constant that indicates whether the environment the code is running is a Web Browser.
- */
-// eslint-disable-next-line @azure/azure-sdk/ts-no-window
-exports.isBrowser = typeof window !== "undefined" && typeof window.document !== "undefined";
-/**
- * A constant that indicates whether the environment the code is running is a Web Worker.
- */
-exports.isWebWorker = typeof self === "object" &&
-    typeof (self === null || self === void 0 ? void 0 : self.importScripts) === "function" &&
-    (((_a = self.constructor) === null || _a === void 0 ? void 0 : _a.name) === "DedicatedWorkerGlobalScope" ||
-        ((_b = self.constructor) === null || _b === void 0 ? void 0 : _b.name) === "ServiceWorkerGlobalScope" ||
-        ((_c = self.constructor) === null || _c === void 0 ? void 0 : _c.name) === "SharedWorkerGlobalScope");
-/**
- * A constant that indicates whether the environment the code is running is Deno.
- */
-exports.isDeno = typeof Deno !== "undefined" &&
-    typeof Deno.version !== "undefined" &&
-    typeof Deno.version.deno !== "undefined";
-/**
- * A constant that indicates whether the environment the code is running is Bun.sh.
- */
-exports.isBun = typeof Bun !== "undefined" && typeof Bun.version !== "undefined";
-/**
- * A constant that indicates whether the environment the code is running is a Node.js compatible environment.
- */
-exports.isNodeLike = typeof globalThis.process !== "undefined" &&
-    Boolean(globalThis.process.version) &&
-    Boolean((_d = globalThis.process.versions) === null || _d === void 0 ? void 0 : _d.node);
-/**
- * A constant that indicates whether the environment the code is running is a Node.js compatible environment.
- * @deprecated Use `isNodeLike` instead.
- */
-exports.isNode = exports.isNodeLike;
-/**
- * A constant that indicates whether the environment the code is running is Node.JS.
- */
-exports.isNodeRuntime = exports.isNodeLike && !exports.isBun && !exports.isDeno;
-/**
- * A constant that indicates whether the environment the code is running is in React-Native.
- */
-// https://github.com/facebook/react-native/blob/main/packages/react-native/Libraries/Core/setUpNavigator.js
-exports.isReactNative = typeof navigator !== "undefined" && (navigator === null || navigator === void 0 ? void 0 : navigator.product) === "ReactNative";
-//# sourceMappingURL=checkEnvironment.js.map
-
-/***/ }),
-
 /***/ 63128:
 /***/ ((__unused_webpack_module, exports, __nccwpck_require__) => {
 
@@ -111843,7 +111319,7 @@ Object.defineProperty(exports, "__esModule", ({ value: true }));
 exports.delay = delay;
 exports.calculateRetryDelay = calculateRetryDelay;
 const createAbortablePromise_js_1 = __nccwpck_require__(63128);
-const random_js_1 = __nccwpck_require__(64196);
+const util_1 = __nccwpck_require__(95750);
 const StandardAbortMessage = "The delay was aborted.";
 /**
  * A wrapper for setTimeout that resolves a promise after timeInMs milliseconds.
@@ -111875,7 +111351,7 @@ function calculateRetryDelay(retryAttempt, config) {
     const clampedDelay = Math.min(config.maxRetryDelayInMs, exponentialDelay);
     // Allow the final value to have some "jitter" (within 50% of the delay size) so
     // that retries across multiple clients don't occur simultaneously.
-    const retryAfterInMs = clampedDelay / 2 + (0, random_js_1.getRandomIntegerInclusive)(0, clampedDelay / 2);
+    const retryAfterInMs = clampedDelay / 2 + (0, util_1.getRandomIntegerInclusive)(0, clampedDelay / 2);
     return { retryAfterInMs };
 }
 //# sourceMappingURL=delay.js.map
@@ -111890,21 +111366,8 @@ function calculateRetryDelay(retryAttempt, config) {
 // Copyright (c) Microsoft Corporation.
 // Licensed under the MIT License.
 Object.defineProperty(exports, "__esModule", ({ value: true }));
-exports.isError = isError;
 exports.getErrorMessage = getErrorMessage;
-const object_js_1 = __nccwpck_require__(17756);
-/**
- * Typeguard for an error object shape (has name and message)
- * @param e - Something caught by a catch clause.
- */
-function isError(e) {
-    if ((0, object_js_1.isObject)(e)) {
-        const hasName = typeof e.name === "string";
-        const hasMessage = typeof e.message === "string";
-        return hasName && hasMessage;
-    }
-    return false;
-}
+const util_1 = __nccwpck_require__(95750);
 /**
  * Given what is thought to be an error object, return the message if possible.
  * If the message is missing, returns a stringified version of the input.
@@ -111912,7 +111375,7 @@ function isError(e) {
  * @returns The error message or a string of the input
  */
 function getErrorMessage(e) {
-    if (isError(e)) {
+    if ((0, util_1.isError)(e)) {
         return e.message;
     }
     else {
@@ -111943,131 +111406,153 @@ function getErrorMessage(e) {
 // Copyright (c) Microsoft Corporation.
 // Licensed under the MIT License.
 Object.defineProperty(exports, "__esModule", ({ value: true }));
-exports.stringToUint8Array = exports.uint8ArrayToString = exports.isWebWorker = exports.isReactNative = exports.isDeno = exports.isNodeRuntime = exports.isNodeLike = exports.isNode = exports.isBun = exports.isBrowser = exports.randomUUID = exports.objectHasProperty = exports.isObjectWithProperties = exports.isDefined = exports.computeSha256Hmac = exports.computeSha256Hash = exports.getErrorMessage = exports.isError = exports.isObject = exports.getRandomIntegerInclusive = exports.createAbortablePromise = exports.cancelablePromiseRace = exports.calculateRetryDelay = exports.delay = void 0;
-var delay_js_1 = __nccwpck_require__(90636);
-Object.defineProperty(exports, "delay", ({ enumerable: true, get: function () { return delay_js_1.delay; } }));
-Object.defineProperty(exports, "calculateRetryDelay", ({ enumerable: true, get: function () { return delay_js_1.calculateRetryDelay; } }));
+exports.isWebWorker = exports.isReactNative = exports.isNodeRuntime = exports.isNodeLike = exports.isNode = exports.isDeno = exports.isBun = exports.isBrowser = exports.objectHasProperty = exports.isObjectWithProperties = exports.isDefined = exports.getErrorMessage = exports.delay = exports.createAbortablePromise = exports.cancelablePromiseRace = void 0;
+exports.calculateRetryDelay = calculateRetryDelay;
+exports.computeSha256Hash = computeSha256Hash;
+exports.computeSha256Hmac = computeSha256Hmac;
+exports.getRandomIntegerInclusive = getRandomIntegerInclusive;
+exports.isError = isError;
+exports.isObject = isObject;
+exports.randomUUID = randomUUID;
+exports.uint8ArrayToString = uint8ArrayToString;
+exports.stringToUint8Array = stringToUint8Array;
+const tslib_1 = __nccwpck_require__(61860);
+const tspRuntime = tslib_1.__importStar(__nccwpck_require__(95750));
 var aborterUtils_js_1 = __nccwpck_require__(95209);
 Object.defineProperty(exports, "cancelablePromiseRace", ({ enumerable: true, get: function () { return aborterUtils_js_1.cancelablePromiseRace; } }));
 var createAbortablePromise_js_1 = __nccwpck_require__(63128);
 Object.defineProperty(exports, "createAbortablePromise", ({ enumerable: true, get: function () { return createAbortablePromise_js_1.createAbortablePromise; } }));
-var random_js_1 = __nccwpck_require__(64196);
-Object.defineProperty(exports, "getRandomIntegerInclusive", ({ enumerable: true, get: function () { return random_js_1.getRandomIntegerInclusive; } }));
-var object_js_1 = __nccwpck_require__(17756);
-Object.defineProperty(exports, "isObject", ({ enumerable: true, get: function () { return object_js_1.isObject; } }));
+var delay_js_1 = __nccwpck_require__(90636);
+Object.defineProperty(exports, "delay", ({ enumerable: true, get: function () { return delay_js_1.delay; } }));
 var error_js_1 = __nccwpck_require__(99945);
-Object.defineProperty(exports, "isError", ({ enumerable: true, get: function () { return error_js_1.isError; } }));
 Object.defineProperty(exports, "getErrorMessage", ({ enumerable: true, get: function () { return error_js_1.getErrorMessage; } }));
-var sha256_js_1 = __nccwpck_require__(19732);
-Object.defineProperty(exports, "computeSha256Hash", ({ enumerable: true, get: function () { return sha256_js_1.computeSha256Hash; } }));
-Object.defineProperty(exports, "computeSha256Hmac", ({ enumerable: true, get: function () { return sha256_js_1.computeSha256Hmac; } }));
 var typeGuards_js_1 = __nccwpck_require__(66277);
 Object.defineProperty(exports, "isDefined", ({ enumerable: true, get: function () { return typeGuards_js_1.isDefined; } }));
 Object.defineProperty(exports, "isObjectWithProperties", ({ enumerable: true, get: function () { return typeGuards_js_1.isObjectWithProperties; } }));
 Object.defineProperty(exports, "objectHasProperty", ({ enumerable: true, get: function () { return typeGuards_js_1.objectHasProperty; } }));
-var uuidUtils_js_1 = __nccwpck_require__(98795);
-Object.defineProperty(exports, "randomUUID", ({ enumerable: true, get: function () { return uuidUtils_js_1.randomUUID; } }));
-var checkEnvironment_js_1 = __nccwpck_require__(8162);
-Object.defineProperty(exports, "isBrowser", ({ enumerable: true, get: function () { return checkEnvironment_js_1.isBrowser; } }));
-Object.defineProperty(exports, "isBun", ({ enumerable: true, get: function () { return checkEnvironment_js_1.isBun; } }));
-Object.defineProperty(exports, "isNode", ({ enumerable: true, get: function () { return checkEnvironment_js_1.isNode; } }));
-Object.defineProperty(exports, "isNodeLike", ({ enumerable: true, get: function () { return checkEnvironment_js_1.isNodeLike; } }));
-Object.defineProperty(exports, "isNodeRuntime", ({ enumerable: true, get: function () { return checkEnvironment_js_1.isNodeRuntime; } }));
-Object.defineProperty(exports, "isDeno", ({ enumerable: true, get: function () { return checkEnvironment_js_1.isDeno; } }));
-Object.defineProperty(exports, "isReactNative", ({ enumerable: true, get: function () { return checkEnvironment_js_1.isReactNative; } }));
-Object.defineProperty(exports, "isWebWorker", ({ enumerable: true, get: function () { return checkEnvironment_js_1.isWebWorker; } }));
-var bytesEncoding_js_1 = __nccwpck_require__(2741);
-Object.defineProperty(exports, "uint8ArrayToString", ({ enumerable: true, get: function () { return bytesEncoding_js_1.uint8ArrayToString; } }));
-Object.defineProperty(exports, "stringToUint8Array", ({ enumerable: true, get: function () { return bytesEncoding_js_1.stringToUint8Array; } }));
-//# sourceMappingURL=index.js.map
-
-/***/ }),
-
-/***/ 17756:
-/***/ ((__unused_webpack_module, exports) => {
-
-"use strict";
-
-// Copyright (c) Microsoft Corporation.
-// Licensed under the MIT License.
-Object.defineProperty(exports, "__esModule", ({ value: true }));
-exports.isObject = isObject;
 /**
- * Helper to determine when an input is a generic JS object.
- * @returns true when input is an object type that is not null, Array, RegExp, or Date.
+ * Calculates the delay interval for retry attempts using exponential delay with jitter.
+ *
+ * @param retryAttempt - The current retry attempt number.
+ *
+ * @param config - The exponential retry configuration.
+ *
+ * @returns An object containing the calculated retry delay.
  */
-function isObject(input) {
-    return (typeof input === "object" &&
-        input !== null &&
-        !Array.isArray(input) &&
-        !(input instanceof RegExp) &&
-        !(input instanceof Date));
-}
-//# sourceMappingURL=object.js.map
-
-/***/ }),
-
-/***/ 64196:
-/***/ ((__unused_webpack_module, exports) => {
-
-"use strict";
-
-// Copyright (c) Microsoft Corporation.
-// Licensed under the MIT License.
-Object.defineProperty(exports, "__esModule", ({ value: true }));
-exports.getRandomIntegerInclusive = getRandomIntegerInclusive;
-/**
- * Returns a random integer value between a lower and upper bound,
- * inclusive of both bounds.
- * Note that this uses Math.random and isn't secure. If you need to use
- * this for any kind of security purpose, find a better source of random.
- * @param min - The smallest integer value allowed.
- * @param max - The largest integer value allowed.
- */
-function getRandomIntegerInclusive(min, max) {
-    // Make sure inputs are integers.
-    min = Math.ceil(min);
-    max = Math.floor(max);
-    // Pick a random offset from zero to the size of the range.
-    // Since Math.random() can never return 1, we have to make the range one larger
-    // in order to be inclusive of the maximum value after we take the floor.
-    const offset = Math.floor(Math.random() * (max - min + 1));
-    return offset + min;
-}
-//# sourceMappingURL=random.js.map
-
-/***/ }),
-
-/***/ 19732:
-/***/ ((__unused_webpack_module, exports, __nccwpck_require__) => {
-
-"use strict";
-
-// Copyright (c) Microsoft Corporation.
-// Licensed under the MIT License.
-Object.defineProperty(exports, "__esModule", ({ value: true }));
-exports.computeSha256Hmac = computeSha256Hmac;
-exports.computeSha256Hash = computeSha256Hash;
-const crypto_1 = __nccwpck_require__(76982);
-/**
- * Generates a SHA-256 HMAC signature.
- * @param key - The HMAC key represented as a base64 string, used to generate the cryptographic HMAC hash.
- * @param stringToSign - The data to be signed.
- * @param encoding - The textual encoding to use for the returned HMAC digest.
- */
-async function computeSha256Hmac(key, stringToSign, encoding) {
-    const decodedKey = Buffer.from(key, "base64");
-    return (0, crypto_1.createHmac)("sha256", decodedKey).update(stringToSign).digest(encoding);
+function calculateRetryDelay(retryAttempt, config) {
+    return tspRuntime.calculateRetryDelay(retryAttempt, config);
 }
 /**
  * Generates a SHA-256 hash.
+ *
  * @param content - The data to be included in the hash.
+ *
  * @param encoding - The textual encoding to use for the returned hash.
  */
-async function computeSha256Hash(content, encoding) {
-    return (0, crypto_1.createHash)("sha256").update(content).digest(encoding);
+function computeSha256Hash(content, encoding) {
+    return tspRuntime.computeSha256Hash(content, encoding);
 }
-//# sourceMappingURL=sha256.js.map
+/**
+ * Generates a SHA-256 HMAC signature.
+ *
+ * @param key - The HMAC key represented as a base64 string, used to generate the cryptographic HMAC hash.
+ *
+ * @param stringToSign - The data to be signed.
+ *
+ * @param encoding - The textual encoding to use for the returned HMAC digest.
+ */
+function computeSha256Hmac(key, stringToSign, encoding) {
+    return tspRuntime.computeSha256Hmac(key, stringToSign, encoding);
+}
+/**
+ * Returns a random integer value between a lower and upper bound, inclusive of both bounds. Note that this uses Math.random and isn't secure. If you need to use this for any kind of security purpose, find a better source of random.
+ *
+ * @param min - The smallest integer value allowed.
+ *
+ * @param max - The largest integer value allowed.
+ */
+function getRandomIntegerInclusive(min, max) {
+    return tspRuntime.getRandomIntegerInclusive(min, max);
+}
+/**
+ * Typeguard for an error object shape (has name and message)
+ *
+ * @param e - Something caught by a catch clause.
+ */
+function isError(e) {
+    return tspRuntime.isError(e);
+}
+/**
+ * Helper to determine when an input is a generic JS object.
+ *
+ * @returns true when input is an object type that is not null, Array, RegExp, or Date.
+ */
+function isObject(input) {
+    return tspRuntime.isObject(input);
+}
+/**
+ * Generated Universally Unique Identifier
+ *
+ * @returns RFC4122 v4 UUID.
+ */
+function randomUUID() {
+    return tspRuntime.randomUUID();
+}
+/**
+ * A constant that indicates whether the environment the code is running is a Web Browser.
+ */
+exports.isBrowser = tspRuntime.isBrowser;
+/**
+ * A constant that indicates whether the environment the code is running is Bun.sh.
+ */
+exports.isBun = tspRuntime.isBun;
+/**
+ * A constant that indicates whether the environment the code is running is Deno.
+ */
+exports.isDeno = tspRuntime.isDeno;
+/**
+ * A constant that indicates whether the environment the code is running is a Node.js compatible environment.
+ *
+ * @deprecated
+ *
+ * Use `isNodeLike` instead.
+ */
+exports.isNode = tspRuntime.isNodeLike;
+/**
+ * A constant that indicates whether the environment the code is running is a Node.js compatible environment.
+ */
+exports.isNodeLike = tspRuntime.isNodeLike;
+/**
+ * A constant that indicates whether the environment the code is running is Node.JS.
+ */
+exports.isNodeRuntime = tspRuntime.isNodeRuntime;
+/**
+ * A constant that indicates whether the environment the code is running is in React-Native.
+ */
+exports.isReactNative = tspRuntime.isReactNative;
+/**
+ * A constant that indicates whether the environment the code is running is a Web Worker.
+ */
+exports.isWebWorker = tspRuntime.isWebWorker;
+/**
+ * The helper that transforms bytes with specific character encoding into string
+ * @param bytes - the uint8array bytes
+ * @param format - the format we use to encode the byte
+ * @returns a string of the encoded string
+ */
+function uint8ArrayToString(bytes, format) {
+    return tspRuntime.uint8ArrayToString(bytes, format);
+}
+/**
+ * The helper that transforms string to specific character encoded bytes array.
+ * @param value - the string to be converted
+ * @param format - the format we use to decode the value
+ * @returns a uint8array
+ */
+function stringToUint8Array(value, format) {
+    return tspRuntime.stringToUint8Array(value, format);
+}
+//# sourceMappingURL=index.js.map
 
 /***/ }),
 
@@ -112114,33 +111599,6 @@ function objectHasProperty(thing, property) {
     return (isDefined(thing) && typeof thing === "object" && property in thing);
 }
 //# sourceMappingURL=typeGuards.js.map
-
-/***/ }),
-
-/***/ 98795:
-/***/ ((__unused_webpack_module, exports, __nccwpck_require__) => {
-
-"use strict";
-
-// Copyright (c) Microsoft Corporation.
-// Licensed under the MIT License.
-var _a;
-Object.defineProperty(exports, "__esModule", ({ value: true }));
-exports.randomUUID = randomUUID;
-const crypto_1 = __nccwpck_require__(76982);
-// NOTE: This is a workaround until we can use `globalThis.crypto.randomUUID` in Node.js 19+.
-const uuidFunction = typeof ((_a = globalThis === null || globalThis === void 0 ? void 0 : globalThis.crypto) === null || _a === void 0 ? void 0 : _a.randomUUID) === "function"
-    ? globalThis.crypto.randomUUID.bind(globalThis.crypto)
-    : crypto_1.randomUUID;
-/**
- * Generated Universally Unique Identifier
- *
- * @returns RFC4122 v4 UUID.
- */
-function randomUUID() {
-    return uuidFunction();
-}
-//# sourceMappingURL=uuidUtils.js.map
 
 /***/ }),
 
@@ -112197,144 +111655,29 @@ Object.defineProperty(exports, "AbortError", ({ enumerable: true, get: function 
 
 /***/ }),
 
-/***/ 1676:
-/***/ ((__unused_webpack_module, exports, __nccwpck_require__) => {
-
-"use strict";
-
-// Copyright (c) Microsoft Corporation.
-// Licensed under the MIT license.
-Object.defineProperty(exports, "__esModule", ({ value: true }));
-const log_js_1 = __nccwpck_require__(36757);
-const debugEnvVariable = (typeof process !== "undefined" && process.env && process.env.DEBUG) || undefined;
-let enabledString;
-let enabledNamespaces = [];
-let skippedNamespaces = [];
-const debuggers = [];
-if (debugEnvVariable) {
-    enable(debugEnvVariable);
-}
-const debugObj = Object.assign((namespace) => {
-    return createDebugger(namespace);
-}, {
-    enable,
-    enabled,
-    disable,
-    log: log_js_1.log,
-});
-function enable(namespaces) {
-    enabledString = namespaces;
-    enabledNamespaces = [];
-    skippedNamespaces = [];
-    const wildcard = /\*/g;
-    const namespaceList = namespaces.split(",").map((ns) => ns.trim().replace(wildcard, ".*?"));
-    for (const ns of namespaceList) {
-        if (ns.startsWith("-")) {
-            skippedNamespaces.push(new RegExp(`^${ns.substr(1)}$`));
-        }
-        else {
-            enabledNamespaces.push(new RegExp(`^${ns}$`));
-        }
-    }
-    for (const instance of debuggers) {
-        instance.enabled = enabled(instance.namespace);
-    }
-}
-function enabled(namespace) {
-    if (namespace.endsWith("*")) {
-        return true;
-    }
-    for (const skipped of skippedNamespaces) {
-        if (skipped.test(namespace)) {
-            return false;
-        }
-    }
-    for (const enabledNamespace of enabledNamespaces) {
-        if (enabledNamespace.test(namespace)) {
-            return true;
-        }
-    }
-    return false;
-}
-function disable() {
-    const result = enabledString || "";
-    enable("");
-    return result;
-}
-function createDebugger(namespace) {
-    const newDebugger = Object.assign(debug, {
-        enabled: enabled(namespace),
-        destroy,
-        log: debugObj.log,
-        namespace,
-        extend,
-    });
-    function debug(...args) {
-        if (!newDebugger.enabled) {
-            return;
-        }
-        if (args.length > 0) {
-            args[0] = `${namespace} ${args[0]}`;
-        }
-        newDebugger.log(...args);
-    }
-    debuggers.push(newDebugger);
-    return newDebugger;
-}
-function destroy() {
-    const index = debuggers.indexOf(this);
-    if (index >= 0) {
-        debuggers.splice(index, 1);
-        return true;
-    }
-    return false;
-}
-function extend(namespace) {
-    const newDebugger = createDebugger(`${this.namespace}:${namespace}`);
-    newDebugger.log = this.log;
-    return newDebugger;
-}
-exports["default"] = debugObj;
-//# sourceMappingURL=debug.js.map
-
-/***/ }),
-
 /***/ 26515:
 /***/ ((__unused_webpack_module, exports, __nccwpck_require__) => {
 
 "use strict";
 
 // Copyright (c) Microsoft Corporation.
-// Licensed under the MIT license.
+// Licensed under the MIT License.
 Object.defineProperty(exports, "__esModule", ({ value: true }));
 exports.AzureLogger = void 0;
 exports.setLogLevel = setLogLevel;
 exports.getLogLevel = getLogLevel;
 exports.createClientLogger = createClientLogger;
-const tslib_1 = __nccwpck_require__(61860);
-const debug_js_1 = tslib_1.__importDefault(__nccwpck_require__(1676));
-const registeredLoggers = new Set();
-const logLevelFromEnv = (typeof process !== "undefined" && process.env && process.env.AZURE_LOG_LEVEL) || undefined;
-let azureLogLevel;
+const logger_1 = __nccwpck_require__(82490);
+const context = (0, logger_1.createLoggerContext)({
+    logLevelEnvVarName: "AZURE_LOG_LEVEL",
+    namespace: "azure",
+});
 /**
  * The AzureLogger provides a mechanism for overriding where logs are output to.
  * By default, logs are sent to stderr.
  * Override the `log` method to redirect logs to another location.
  */
-exports.AzureLogger = (0, debug_js_1.default)("azure");
-exports.AzureLogger.log = (...args) => {
-    debug_js_1.default.log(...args);
-};
-const AZURE_LOG_LEVELS = ["verbose", "info", "warning", "error"];
-if (logLevelFromEnv) {
-    // avoid calling setLogLevel because we don't want a mis-set environment variable to crash
-    if (isAzureLogLevel(logLevelFromEnv)) {
-        setLogLevel(logLevelFromEnv);
-    }
-    else {
-        console.error(`AZURE_LOG_LEVEL set to unknown log level '${logLevelFromEnv}'; logging is not enabled. Acceptable values: ${AZURE_LOG_LEVELS.join(", ")}.`);
-    }
-}
+exports.AzureLogger = context.logger;
 /**
  * Immediately enables logging at the specified log level. If no level is specified, logging is disabled.
  * @param level - The log level to enable for logging.
@@ -112345,89 +111688,23 @@ if (logLevelFromEnv) {
  * - error
  */
 function setLogLevel(level) {
-    if (level && !isAzureLogLevel(level)) {
-        throw new Error(`Unknown log level '${level}'. Acceptable values: ${AZURE_LOG_LEVELS.join(",")}`);
-    }
-    azureLogLevel = level;
-    const enabledNamespaces = [];
-    for (const logger of registeredLoggers) {
-        if (shouldEnable(logger)) {
-            enabledNamespaces.push(logger.namespace);
-        }
-    }
-    debug_js_1.default.enable(enabledNamespaces.join(","));
+    context.setLogLevel(level);
 }
 /**
  * Retrieves the currently specified log level.
  */
 function getLogLevel() {
-    return azureLogLevel;
+    return context.getLogLevel();
 }
-const levelMap = {
-    verbose: 400,
-    info: 300,
-    warning: 200,
-    error: 100,
-};
 /**
  * Creates a logger for use by the Azure SDKs that inherits from `AzureLogger`.
  * @param namespace - The name of the SDK package.
  * @hidden
  */
 function createClientLogger(namespace) {
-    const clientRootLogger = exports.AzureLogger.extend(namespace);
-    patchLogMethod(exports.AzureLogger, clientRootLogger);
-    return {
-        error: createLogger(clientRootLogger, "error"),
-        warning: createLogger(clientRootLogger, "warning"),
-        info: createLogger(clientRootLogger, "info"),
-        verbose: createLogger(clientRootLogger, "verbose"),
-    };
-}
-function patchLogMethod(parent, child) {
-    child.log = (...args) => {
-        parent.log(...args);
-    };
-}
-function createLogger(parent, level) {
-    const logger = Object.assign(parent.extend(level), {
-        level,
-    });
-    patchLogMethod(parent, logger);
-    if (shouldEnable(logger)) {
-        const enabledNamespaces = debug_js_1.default.disable();
-        debug_js_1.default.enable(enabledNamespaces + "," + logger.namespace);
-    }
-    registeredLoggers.add(logger);
-    return logger;
-}
-function shouldEnable(logger) {
-    return Boolean(azureLogLevel && levelMap[logger.level] <= levelMap[azureLogLevel]);
-}
-function isAzureLogLevel(logLevel) {
-    return AZURE_LOG_LEVELS.includes(logLevel);
+    return context.createClientLogger(namespace);
 }
 //# sourceMappingURL=index.js.map
-
-/***/ }),
-
-/***/ 36757:
-/***/ ((__unused_webpack_module, exports, __nccwpck_require__) => {
-
-"use strict";
-
-// Copyright (c) Microsoft Corporation.
-// Licensed under the MIT license.
-Object.defineProperty(exports, "__esModule", ({ value: true }));
-exports.log = log;
-const tslib_1 = __nccwpck_require__(61860);
-const node_os_1 = __nccwpck_require__(48161);
-const node_util_1 = tslib_1.__importDefault(__nccwpck_require__(57975));
-const process = tslib_1.__importStar(__nccwpck_require__(1708));
-function log(message, ...args) {
-    process.stderr.write(`${node_util_1.default.format(message, ...args)}${node_os_1.EOL}`);
-}
-//# sourceMappingURL=log.js.map
 
 /***/ }),
 
@@ -114056,35 +113333,4426 @@ module.exports = parseParams
 
 /***/ }),
 
+/***/ 99992:
+/***/ ((__unused_webpack_module, exports) => {
+
+"use strict";
+
+// Copyright (c) Microsoft Corporation.
+// Licensed under the MIT License.
+Object.defineProperty(exports, "__esModule", ({ value: true }));
+exports.AbortError = void 0;
+/**
+ * This error is thrown when an asynchronous operation has been aborted.
+ * Check for this error by testing the `name` that the name property of the
+ * error matches `"AbortError"`.
+ *
+ * @example
+ * ```ts snippet:ReadmeSampleAbortError
+ * import { AbortError } from "@typespec/ts-http-runtime";
+ *
+ * async function doAsyncWork(options: { abortSignal: AbortSignal }): Promise<void> {
+ *   if (options.abortSignal.aborted) {
+ *     throw new AbortError();
+ *   }
+ *
+ *   // do async work
+ * }
+ *
+ * const controller = new AbortController();
+ * controller.abort();
+ *
+ * try {
+ *   doAsyncWork({ abortSignal: controller.signal });
+ * } catch (e) {
+ *   if (e instanceof Error && e.name === "AbortError") {
+ *     // handle abort error here.
+ *   }
+ * }
+ * ```
+ */
+class AbortError extends Error {
+    constructor(message) {
+        super(message);
+        this.name = "AbortError";
+    }
+}
+exports.AbortError = AbortError;
+//# sourceMappingURL=AbortError.js.map
+
+/***/ }),
+
+/***/ 36227:
+/***/ ((__unused_webpack_module, exports) => {
+
+"use strict";
+
+// Copyright (c) Microsoft Corporation.
+// Licensed under the MIT License.
+Object.defineProperty(exports, "__esModule", ({ value: true }));
+exports.isOAuth2TokenCredential = isOAuth2TokenCredential;
+exports.isBearerTokenCredential = isBearerTokenCredential;
+exports.isBasicCredential = isBasicCredential;
+exports.isApiKeyCredential = isApiKeyCredential;
+/**
+ * Type guard to check if a credential is an OAuth2 token credential.
+ */
+function isOAuth2TokenCredential(credential) {
+    return "getOAuth2Token" in credential;
+}
+/**
+ * Type guard to check if a credential is a Bearer token credential.
+ */
+function isBearerTokenCredential(credential) {
+    return "getBearerToken" in credential;
+}
+/**
+ * Type guard to check if a credential is a Basic auth credential.
+ */
+function isBasicCredential(credential) {
+    return "username" in credential && "password" in credential;
+}
+/**
+ * Type guard to check if a credential is an API key credential.
+ */
+function isApiKeyCredential(credential) {
+    return "key" in credential;
+}
+//# sourceMappingURL=credentials.js.map
+
+/***/ }),
+
+/***/ 43097:
+/***/ ((__unused_webpack_module, exports) => {
+
+"use strict";
+
+// Copyright (c) Microsoft Corporation.
+// Licensed under the MIT License.
+Object.defineProperty(exports, "__esModule", ({ value: true }));
+//# sourceMappingURL=oauth2Flows.js.map
+
+/***/ }),
+
+/***/ 92097:
+/***/ ((__unused_webpack_module, exports) => {
+
+"use strict";
+
+// Copyright (c) Microsoft Corporation.
+// Licensed under the MIT License.
+Object.defineProperty(exports, "__esModule", ({ value: true }));
+//# sourceMappingURL=schemes.js.map
+
+/***/ }),
+
+/***/ 71408:
+/***/ ((__unused_webpack_module, exports) => {
+
+"use strict";
+
+// Copyright (c) Microsoft Corporation.
+// Licensed under the MIT License.
+Object.defineProperty(exports, "__esModule", ({ value: true }));
+exports.apiVersionPolicyName = void 0;
+exports.apiVersionPolicy = apiVersionPolicy;
+exports.apiVersionPolicyName = "ApiVersionPolicy";
+/**
+ * Creates a policy that sets the apiVersion as a query parameter on every request
+ * @param options - Client options
+ * @returns Pipeline policy that sets the apiVersion as a query parameter on every request
+ */
+function apiVersionPolicy(options) {
+    return {
+        name: exports.apiVersionPolicyName,
+        sendRequest: (req, next) => {
+            // Use the apiVesion defined in request url directly
+            // Append one if there is no apiVesion and we have one at client options
+            const url = new URL(req.url);
+            if (!url.searchParams.get("api-version") && options.apiVersion) {
+                req.url = `${req.url}${Array.from(url.searchParams.keys()).length > 0 ? "&" : "?"}api-version=${options.apiVersion}`;
+            }
+            return next(req);
+        },
+    };
+}
+//# sourceMappingURL=apiVersionPolicy.js.map
+
+/***/ }),
+
+/***/ 88728:
+/***/ ((__unused_webpack_module, exports, __nccwpck_require__) => {
+
+"use strict";
+
+// Copyright (c) Microsoft Corporation.
+// Licensed under the MIT License.
+Object.defineProperty(exports, "__esModule", ({ value: true }));
+exports.createDefaultPipeline = createDefaultPipeline;
+exports.getCachedDefaultHttpsClient = getCachedDefaultHttpsClient;
+const defaultHttpClient_js_1 = __nccwpck_require__(69468);
+const createPipelineFromOptions_js_1 = __nccwpck_require__(91810);
+const apiVersionPolicy_js_1 = __nccwpck_require__(71408);
+const credentials_js_1 = __nccwpck_require__(36227);
+const apiKeyAuthenticationPolicy_js_1 = __nccwpck_require__(42095);
+const basicAuthenticationPolicy_js_1 = __nccwpck_require__(15756);
+const bearerAuthenticationPolicy_js_1 = __nccwpck_require__(89709);
+const oauth2AuthenticationPolicy_js_1 = __nccwpck_require__(20219);
+let cachedHttpClient;
+/**
+ * Creates a default rest pipeline to re-use accross Rest Level Clients
+ */
+function createDefaultPipeline(options = {}) {
+    const pipeline = (0, createPipelineFromOptions_js_1.createPipelineFromOptions)(options);
+    pipeline.addPolicy((0, apiVersionPolicy_js_1.apiVersionPolicy)(options));
+    const { credential, authSchemes, allowInsecureConnection } = options;
+    if (credential) {
+        if ((0, credentials_js_1.isApiKeyCredential)(credential)) {
+            pipeline.addPolicy((0, apiKeyAuthenticationPolicy_js_1.apiKeyAuthenticationPolicy)({ authSchemes, credential, allowInsecureConnection }));
+        }
+        else if ((0, credentials_js_1.isBasicCredential)(credential)) {
+            pipeline.addPolicy((0, basicAuthenticationPolicy_js_1.basicAuthenticationPolicy)({ authSchemes, credential, allowInsecureConnection }));
+        }
+        else if ((0, credentials_js_1.isBearerTokenCredential)(credential)) {
+            pipeline.addPolicy((0, bearerAuthenticationPolicy_js_1.bearerAuthenticationPolicy)({ authSchemes, credential, allowInsecureConnection }));
+        }
+        else if ((0, credentials_js_1.isOAuth2TokenCredential)(credential)) {
+            pipeline.addPolicy((0, oauth2AuthenticationPolicy_js_1.oauth2AuthenticationPolicy)({ authSchemes, credential, allowInsecureConnection }));
+        }
+    }
+    return pipeline;
+}
+function getCachedDefaultHttpsClient() {
+    if (!cachedHttpClient) {
+        cachedHttpClient = (0, defaultHttpClient_js_1.createDefaultHttpClient)();
+    }
+    return cachedHttpClient;
+}
+//# sourceMappingURL=clientHelpers.js.map
+
+/***/ }),
+
+/***/ 86191:
+/***/ ((__unused_webpack_module, exports, __nccwpck_require__) => {
+
+"use strict";
+
+// Copyright (c) Microsoft Corporation.
+// Licensed under the MIT License.
+Object.defineProperty(exports, "__esModule", ({ value: true }));
+exports.getClient = getClient;
+const clientHelpers_js_1 = __nccwpck_require__(88728);
+const sendRequest_js_1 = __nccwpck_require__(16311);
+const urlHelpers_js_1 = __nccwpck_require__(37088);
+const checkEnvironment_js_1 = __nccwpck_require__(85086);
+/**
+ * Creates a client with a default pipeline
+ * @param endpoint - Base endpoint for the client
+ * @param credentials - Credentials to authenticate the requests
+ * @param options - Client options
+ */
+function getClient(endpoint, clientOptions = {}) {
+    var _a, _b, _c;
+    const pipeline = (_a = clientOptions.pipeline) !== null && _a !== void 0 ? _a : (0, clientHelpers_js_1.createDefaultPipeline)(clientOptions);
+    if ((_b = clientOptions.additionalPolicies) === null || _b === void 0 ? void 0 : _b.length) {
+        for (const { policy, position } of clientOptions.additionalPolicies) {
+            // Sign happens after Retry and is commonly needed to occur
+            // before policies that intercept post-retry.
+            const afterPhase = position === "perRetry" ? "Sign" : undefined;
+            pipeline.addPolicy(policy, {
+                afterPhase,
+            });
+        }
+    }
+    const { allowInsecureConnection, httpClient } = clientOptions;
+    const endpointUrl = (_c = clientOptions.endpoint) !== null && _c !== void 0 ? _c : endpoint;
+    const client = (path, ...args) => {
+        const getUrl = (requestOptions) => (0, urlHelpers_js_1.buildRequestUrl)(endpointUrl, path, args, Object.assign({ allowInsecureConnection }, requestOptions));
+        return {
+            get: (requestOptions = {}) => {
+                return buildOperation("GET", getUrl(requestOptions), pipeline, requestOptions, allowInsecureConnection, httpClient);
+            },
+            post: (requestOptions = {}) => {
+                return buildOperation("POST", getUrl(requestOptions), pipeline, requestOptions, allowInsecureConnection, httpClient);
+            },
+            put: (requestOptions = {}) => {
+                return buildOperation("PUT", getUrl(requestOptions), pipeline, requestOptions, allowInsecureConnection, httpClient);
+            },
+            patch: (requestOptions = {}) => {
+                return buildOperation("PATCH", getUrl(requestOptions), pipeline, requestOptions, allowInsecureConnection, httpClient);
+            },
+            delete: (requestOptions = {}) => {
+                return buildOperation("DELETE", getUrl(requestOptions), pipeline, requestOptions, allowInsecureConnection, httpClient);
+            },
+            head: (requestOptions = {}) => {
+                return buildOperation("HEAD", getUrl(requestOptions), pipeline, requestOptions, allowInsecureConnection, httpClient);
+            },
+            options: (requestOptions = {}) => {
+                return buildOperation("OPTIONS", getUrl(requestOptions), pipeline, requestOptions, allowInsecureConnection, httpClient);
+            },
+            trace: (requestOptions = {}) => {
+                return buildOperation("TRACE", getUrl(requestOptions), pipeline, requestOptions, allowInsecureConnection, httpClient);
+            },
+        };
+    };
+    return {
+        path: client,
+        pathUnchecked: client,
+        pipeline,
+    };
+}
+function buildOperation(method, url, pipeline, options, allowInsecureConnection, httpClient) {
+    var _a;
+    allowInsecureConnection = (_a = options.allowInsecureConnection) !== null && _a !== void 0 ? _a : allowInsecureConnection;
+    return {
+        then: function (onFulfilled, onrejected) {
+            return (0, sendRequest_js_1.sendRequest)(method, url, pipeline, Object.assign(Object.assign({}, options), { allowInsecureConnection }), httpClient).then(onFulfilled, onrejected);
+        },
+        async asBrowserStream() {
+            if (checkEnvironment_js_1.isNodeLike) {
+                throw new Error("`asBrowserStream` is supported only in the browser environment. Use `asNodeStream` instead to obtain the response body stream. If you require a Web stream of the response in Node, consider using `Readable.toWeb` on the result of `asNodeStream`.");
+            }
+            else {
+                return (0, sendRequest_js_1.sendRequest)(method, url, pipeline, Object.assign(Object.assign({}, options), { allowInsecureConnection, responseAsStream: true }), httpClient);
+            }
+        },
+        async asNodeStream() {
+            if (checkEnvironment_js_1.isNodeLike) {
+                return (0, sendRequest_js_1.sendRequest)(method, url, pipeline, Object.assign(Object.assign({}, options), { allowInsecureConnection, responseAsStream: true }), httpClient);
+            }
+            else {
+                throw new Error("`isNodeStream` is not supported in the browser environment. Use `asBrowserStream` to obtain the response body stream.");
+            }
+        },
+    };
+}
+//# sourceMappingURL=getClient.js.map
+
+/***/ }),
+
+/***/ 18240:
+/***/ ((__unused_webpack_module, exports, __nccwpck_require__) => {
+
+"use strict";
+
+// Copyright (c) Microsoft Corporation.
+// Licensed under the MIT License.
+Object.defineProperty(exports, "__esModule", ({ value: true }));
+exports.buildBodyPart = buildBodyPart;
+exports.buildMultipartBody = buildMultipartBody;
+const restError_js_1 = __nccwpck_require__(9758);
+const httpHeaders_js_1 = __nccwpck_require__(4220);
+const bytesEncoding_js_1 = __nccwpck_require__(82921);
+const typeGuards_js_1 = __nccwpck_require__(48505);
+/**
+ * Get value of a header in the part descriptor ignoring case
+ */
+function getHeaderValue(descriptor, headerName) {
+    if (descriptor.headers) {
+        const actualHeaderName = Object.keys(descriptor.headers).find((x) => x.toLowerCase() === headerName.toLowerCase());
+        if (actualHeaderName) {
+            return descriptor.headers[actualHeaderName];
+        }
+    }
+    return undefined;
+}
+function getPartContentType(descriptor) {
+    const contentTypeHeader = getHeaderValue(descriptor, "content-type");
+    if (contentTypeHeader) {
+        return contentTypeHeader;
+    }
+    // Special value of null means content type is to be omitted
+    if (descriptor.contentType === null) {
+        return undefined;
+    }
+    if (descriptor.contentType) {
+        return descriptor.contentType;
+    }
+    const { body } = descriptor;
+    if (body === null || body === undefined) {
+        return undefined;
+    }
+    if (typeof body === "string" || typeof body === "number" || typeof body === "boolean") {
+        return "text/plain; charset=UTF-8";
+    }
+    if (body instanceof Blob) {
+        return body.type || "application/octet-stream";
+    }
+    if ((0, typeGuards_js_1.isBinaryBody)(body)) {
+        return "application/octet-stream";
+    }
+    // arbitrary non-text object -> generic JSON content type by default. We will try to JSON.stringify the body.
+    return "application/json";
+}
+/**
+ * Enclose value in quotes and escape special characters, for use in the Content-Disposition header
+ */
+function escapeDispositionField(value) {
+    return JSON.stringify(value);
+}
+function getContentDisposition(descriptor) {
+    var _a;
+    const contentDispositionHeader = getHeaderValue(descriptor, "content-disposition");
+    if (contentDispositionHeader) {
+        return contentDispositionHeader;
+    }
+    if (descriptor.dispositionType === undefined &&
+        descriptor.name === undefined &&
+        descriptor.filename === undefined) {
+        return undefined;
+    }
+    const dispositionType = (_a = descriptor.dispositionType) !== null && _a !== void 0 ? _a : "form-data";
+    let disposition = dispositionType;
+    if (descriptor.name) {
+        disposition += `; name=${escapeDispositionField(descriptor.name)}`;
+    }
+    let filename = undefined;
+    if (descriptor.filename) {
+        filename = descriptor.filename;
+    }
+    else if (typeof File !== "undefined" && descriptor.body instanceof File) {
+        const filenameFromFile = descriptor.body.name;
+        if (filenameFromFile !== "") {
+            filename = filenameFromFile;
+        }
+    }
+    if (filename) {
+        disposition += `; filename=${escapeDispositionField(filename)}`;
+    }
+    return disposition;
+}
+function normalizeBody(body, contentType) {
+    if (body === undefined) {
+        // zero-length body
+        return new Uint8Array([]);
+    }
+    // binary and primitives should go straight on the wire regardless of content type
+    if ((0, typeGuards_js_1.isBinaryBody)(body)) {
+        return body;
+    }
+    if (typeof body === "string" || typeof body === "number" || typeof body === "boolean") {
+        return (0, bytesEncoding_js_1.stringToUint8Array)(String(body), "utf-8");
+    }
+    // stringify objects for JSON-ish content types e.g. application/json, application/merge-patch+json, application/vnd.oci.manifest.v1+json, application.json; charset=UTF-8
+    if (contentType && /application\/(.+\+)?json(;.+)?/i.test(String(contentType))) {
+        return (0, bytesEncoding_js_1.stringToUint8Array)(JSON.stringify(body), "utf-8");
+    }
+    throw new restError_js_1.RestError(`Unsupported body/content-type combination: ${body}, ${contentType}`);
+}
+function buildBodyPart(descriptor) {
+    var _a;
+    const contentType = getPartContentType(descriptor);
+    const contentDisposition = getContentDisposition(descriptor);
+    const headers = (0, httpHeaders_js_1.createHttpHeaders)((_a = descriptor.headers) !== null && _a !== void 0 ? _a : {});
+    if (contentType) {
+        headers.set("content-type", contentType);
+    }
+    if (contentDisposition) {
+        headers.set("content-disposition", contentDisposition);
+    }
+    const body = normalizeBody(descriptor.body, contentType);
+    return {
+        headers,
+        body,
+    };
+}
+function buildMultipartBody(parts) {
+    return { parts: parts.map(buildBodyPart) };
+}
+//# sourceMappingURL=multipart.js.map
+
+/***/ }),
+
+/***/ 19635:
+/***/ ((__unused_webpack_module, exports) => {
+
+"use strict";
+
+// Copyright (c) Microsoft Corporation.
+// Licensed under the MIT License.
+Object.defineProperty(exports, "__esModule", ({ value: true }));
+exports.operationOptionsToRequestParameters = operationOptionsToRequestParameters;
+/**
+ * Helper function to convert OperationOptions to RequestParameters
+ * @param options - the options that are used by Modular layer to send the request
+ * @returns the result of the conversion in RequestParameters of RLC layer
+ */
+function operationOptionsToRequestParameters(options) {
+    var _a, _b, _c, _d, _e, _f;
+    return {
+        allowInsecureConnection: (_a = options.requestOptions) === null || _a === void 0 ? void 0 : _a.allowInsecureConnection,
+        timeout: (_b = options.requestOptions) === null || _b === void 0 ? void 0 : _b.timeout,
+        skipUrlEncoding: (_c = options.requestOptions) === null || _c === void 0 ? void 0 : _c.skipUrlEncoding,
+        abortSignal: options.abortSignal,
+        onUploadProgress: (_d = options.requestOptions) === null || _d === void 0 ? void 0 : _d.onUploadProgress,
+        onDownloadProgress: (_e = options.requestOptions) === null || _e === void 0 ? void 0 : _e.onDownloadProgress,
+        headers: Object.assign({}, (_f = options.requestOptions) === null || _f === void 0 ? void 0 : _f.headers),
+        onResponse: options.onResponse,
+    };
+}
+//# sourceMappingURL=operationOptionHelpers.js.map
+
+/***/ }),
+
+/***/ 97332:
+/***/ ((__unused_webpack_module, exports, __nccwpck_require__) => {
+
+"use strict";
+
+// Copyright (c) Microsoft Corporation.
+// Licensed under the MIT License.
+Object.defineProperty(exports, "__esModule", ({ value: true }));
+exports.createRestError = createRestError;
+const restError_js_1 = __nccwpck_require__(9758);
+const httpHeaders_js_1 = __nccwpck_require__(4220);
+function createRestError(messageOrResponse, response) {
+    var _a, _b, _c;
+    const resp = typeof messageOrResponse === "string" ? response : messageOrResponse;
+    const internalError = (_b = (_a = resp.body) === null || _a === void 0 ? void 0 : _a.error) !== null && _b !== void 0 ? _b : resp.body;
+    const message = typeof messageOrResponse === "string"
+        ? messageOrResponse
+        : ((_c = internalError === null || internalError === void 0 ? void 0 : internalError.message) !== null && _c !== void 0 ? _c : `Unexpected status code: ${resp.status}`);
+    return new restError_js_1.RestError(message, {
+        statusCode: statusCodeToNumber(resp.status),
+        code: internalError === null || internalError === void 0 ? void 0 : internalError.code,
+        request: resp.request,
+        response: toPipelineResponse(resp),
+    });
+}
+function toPipelineResponse(response) {
+    var _a;
+    return {
+        headers: (0, httpHeaders_js_1.createHttpHeaders)(response.headers),
+        request: response.request,
+        status: (_a = statusCodeToNumber(response.status)) !== null && _a !== void 0 ? _a : -1,
+    };
+}
+function statusCodeToNumber(statusCode) {
+    const status = Number.parseInt(statusCode);
+    return Number.isNaN(status) ? undefined : status;
+}
+//# sourceMappingURL=restError.js.map
+
+/***/ }),
+
+/***/ 16311:
+/***/ ((__unused_webpack_module, exports, __nccwpck_require__) => {
+
+"use strict";
+
+// Copyright (c) Microsoft Corporation.
+// Licensed under the MIT License.
+Object.defineProperty(exports, "__esModule", ({ value: true }));
+exports.sendRequest = sendRequest;
+const restError_js_1 = __nccwpck_require__(9758);
+const httpHeaders_js_1 = __nccwpck_require__(4220);
+const pipelineRequest_js_1 = __nccwpck_require__(72305);
+const clientHelpers_js_1 = __nccwpck_require__(88728);
+const typeGuards_js_1 = __nccwpck_require__(48505);
+const multipart_js_1 = __nccwpck_require__(18240);
+/**
+ * Helper function to send request used by the client
+ * @param method - method to use to send the request
+ * @param url - url to send the request to
+ * @param pipeline - pipeline with the policies to run when sending the request
+ * @param options - request options
+ * @param customHttpClient - a custom HttpClient to use when making the request
+ * @returns returns and HttpResponse
+ */
+async function sendRequest(method, url, pipeline, options = {}, customHttpClient) {
+    var _a;
+    const httpClient = customHttpClient !== null && customHttpClient !== void 0 ? customHttpClient : (0, clientHelpers_js_1.getCachedDefaultHttpsClient)();
+    const request = buildPipelineRequest(method, url, options);
+    try {
+        const response = await pipeline.sendRequest(httpClient, request);
+        const headers = response.headers.toJSON();
+        const stream = (_a = response.readableStreamBody) !== null && _a !== void 0 ? _a : response.browserStreamBody;
+        const parsedBody = options.responseAsStream || stream !== undefined ? undefined : getResponseBody(response);
+        const body = stream !== null && stream !== void 0 ? stream : parsedBody;
+        if (options === null || options === void 0 ? void 0 : options.onResponse) {
+            options.onResponse(Object.assign(Object.assign({}, response), { request, rawHeaders: headers, parsedBody }));
+        }
+        return {
+            request,
+            headers,
+            status: `${response.status}`,
+            body,
+        };
+    }
+    catch (e) {
+        if ((0, restError_js_1.isRestError)(e) && e.response && options.onResponse) {
+            const { response } = e;
+            const rawHeaders = response.headers.toJSON();
+            // UNBRANDED DIFFERENCE: onResponse callback does not have a second __legacyError property
+            options === null || options === void 0 ? void 0 : options.onResponse(Object.assign(Object.assign({}, response), { request, rawHeaders }), e);
+        }
+        throw e;
+    }
+}
+/**
+ * Function to determine the request content type
+ * @param options - request options InternalRequestParameters
+ * @returns returns the content-type
+ */
+function getRequestContentType(options = {}) {
+    var _a, _b, _c;
+    return ((_c = (_a = options.contentType) !== null && _a !== void 0 ? _a : (_b = options.headers) === null || _b === void 0 ? void 0 : _b["content-type"]) !== null && _c !== void 0 ? _c : getContentType(options.body));
+}
+/**
+ * Function to determine the content-type of a body
+ * this is used if an explicit content-type is not provided
+ * @param body - body in the request
+ * @returns returns the content-type
+ */
+function getContentType(body) {
+    if (ArrayBuffer.isView(body)) {
+        return "application/octet-stream";
+    }
+    if (typeof body === "string") {
+        try {
+            JSON.parse(body);
+            return "application/json";
+        }
+        catch (error) {
+            // If we fail to parse the body, it is not json
+            return undefined;
+        }
+    }
+    // By default return json
+    return "application/json";
+}
+function buildPipelineRequest(method, url, options = {}) {
+    var _a, _b, _c;
+    const requestContentType = getRequestContentType(options);
+    const { body, multipartBody } = getRequestBody(options.body, requestContentType);
+    const hasContent = body !== undefined || multipartBody !== undefined;
+    const headers = (0, httpHeaders_js_1.createHttpHeaders)(Object.assign(Object.assign(Object.assign({}, (options.headers ? options.headers : {})), { accept: (_c = (_a = options.accept) !== null && _a !== void 0 ? _a : (_b = options.headers) === null || _b === void 0 ? void 0 : _b.accept) !== null && _c !== void 0 ? _c : "application/json" }), (hasContent &&
+        requestContentType && {
+        "content-type": requestContentType,
+    })));
+    return (0, pipelineRequest_js_1.createPipelineRequest)({
+        url,
+        method,
+        body,
+        multipartBody,
+        headers,
+        allowInsecureConnection: options.allowInsecureConnection,
+        abortSignal: options.abortSignal,
+        onUploadProgress: options.onUploadProgress,
+        onDownloadProgress: options.onDownloadProgress,
+        timeout: options.timeout,
+        enableBrowserStreams: true,
+        streamResponseStatusCodes: options.responseAsStream
+            ? new Set([Number.POSITIVE_INFINITY])
+            : undefined,
+    });
+}
+/**
+ * Prepares the body before sending the request
+ */
+function getRequestBody(body, contentType = "") {
+    if (body === undefined) {
+        return { body: undefined };
+    }
+    if (typeof FormData !== "undefined" && body instanceof FormData) {
+        return { body };
+    }
+    if ((0, typeGuards_js_1.isReadableStream)(body)) {
+        return { body };
+    }
+    if (ArrayBuffer.isView(body)) {
+        return { body: body instanceof Uint8Array ? body : JSON.stringify(body) };
+    }
+    const firstType = contentType.split(";")[0];
+    switch (firstType) {
+        case "application/json":
+            return { body: JSON.stringify(body) };
+        case "multipart/form-data":
+            if (Array.isArray(body)) {
+                return { multipartBody: (0, multipart_js_1.buildMultipartBody)(body) };
+            }
+            return { body: JSON.stringify(body) };
+        case "text/plain":
+            return { body: String(body) };
+        default:
+            if (typeof body === "string") {
+                return { body };
+            }
+            return { body: JSON.stringify(body) };
+    }
+}
+/**
+ * Prepares the response body
+ */
+function getResponseBody(response) {
+    var _a, _b;
+    // Set the default response type
+    const contentType = (_a = response.headers.get("content-type")) !== null && _a !== void 0 ? _a : "";
+    const firstType = contentType.split(";")[0];
+    const bodyToParse = (_b = response.bodyAsText) !== null && _b !== void 0 ? _b : "";
+    if (firstType === "text/plain") {
+        return String(bodyToParse);
+    }
+    // Default to "application/json" and fallback to string;
+    try {
+        return bodyToParse ? JSON.parse(bodyToParse) : undefined;
+    }
+    catch (error) {
+        // If we were supposed to get a JSON object and failed to
+        // parse, throw a parse error
+        if (firstType === "application/json") {
+            throw createParseError(response, error);
+        }
+        // We are not sure how to handle the response so we return it as
+        // plain text.
+        return String(bodyToParse);
+    }
+}
+function createParseError(response, err) {
+    var _a;
+    const msg = `Error "${err}" occurred while parsing the response body - ${response.bodyAsText}.`;
+    const errCode = (_a = err.code) !== null && _a !== void 0 ? _a : restError_js_1.RestError.PARSE_ERROR;
+    return new restError_js_1.RestError(msg, {
+        code: errCode,
+        statusCode: response.status,
+        request: response.request,
+        response: response,
+    });
+}
+//# sourceMappingURL=sendRequest.js.map
+
+/***/ }),
+
+/***/ 37088:
+/***/ ((__unused_webpack_module, exports) => {
+
+"use strict";
+
+// Copyright (c) Microsoft Corporation.
+// Licensed under the MIT License.
+Object.defineProperty(exports, "__esModule", ({ value: true }));
+exports.buildRequestUrl = buildRequestUrl;
+exports.buildBaseUrl = buildBaseUrl;
+exports.replaceAll = replaceAll;
+function isQueryParameterWithOptions(x) {
+    const value = x.value;
+    return (value !== undefined && value.toString !== undefined && typeof value.toString === "function");
+}
+/**
+ * Builds the request url, filling in query and path parameters
+ * @param endpoint - base url which can be a template url
+ * @param routePath - path to append to the endpoint
+ * @param pathParameters - values of the path parameters
+ * @param options - request parameters including query parameters
+ * @returns a full url with path and query parameters
+ */
+function buildRequestUrl(endpoint, routePath, pathParameters, options = {}) {
+    if (routePath.startsWith("https://") || routePath.startsWith("http://")) {
+        return routePath;
+    }
+    endpoint = buildBaseUrl(endpoint, options);
+    routePath = buildRoutePath(routePath, pathParameters, options);
+    const requestUrl = appendQueryParams(`${endpoint}/${routePath}`, options);
+    const url = new URL(requestUrl);
+    return (url
+        .toString()
+        // Remove double forward slashes
+        .replace(/([^:]\/)\/+/g, "$1"));
+}
+function getQueryParamValue(key, allowReserved, style, param) {
+    let separator;
+    if (style === "pipeDelimited") {
+        separator = "|";
+    }
+    else if (style === "spaceDelimited") {
+        separator = "%20";
+    }
+    else {
+        separator = ",";
+    }
+    let paramValues;
+    if (Array.isArray(param)) {
+        paramValues = param;
+    }
+    else if (typeof param === "object" && param.toString === Object.prototype.toString) {
+        // If the parameter is an object without a custom toString implementation (e.g. a Date),
+        // then we should deconstruct the object into an array [key1, value1, key2, value2, ...].
+        paramValues = Object.entries(param).flat();
+    }
+    else {
+        paramValues = [param];
+    }
+    const value = paramValues
+        .map((p) => {
+        if (p === null || p === undefined) {
+            return "";
+        }
+        if (!p.toString || typeof p.toString !== "function") {
+            throw new Error(`Query parameters must be able to be represented as string, ${key} can't`);
+        }
+        const rawValue = p.toISOString !== undefined ? p.toISOString() : p.toString();
+        return allowReserved ? rawValue : encodeURIComponent(rawValue);
+    })
+        .join(separator);
+    return `${allowReserved ? key : encodeURIComponent(key)}=${value}`;
+}
+function appendQueryParams(url, options = {}) {
+    var _a, _b, _c, _d;
+    if (!options.queryParameters) {
+        return url;
+    }
+    const parsedUrl = new URL(url);
+    const queryParams = options.queryParameters;
+    const paramStrings = [];
+    for (const key of Object.keys(queryParams)) {
+        const param = queryParams[key];
+        if (param === undefined || param === null) {
+            continue;
+        }
+        const hasMetadata = isQueryParameterWithOptions(param);
+        const rawValue = hasMetadata ? param.value : param;
+        const explode = hasMetadata ? ((_a = param.explode) !== null && _a !== void 0 ? _a : false) : false;
+        const style = hasMetadata && param.style ? param.style : "form";
+        if (explode) {
+            if (Array.isArray(rawValue)) {
+                for (const item of rawValue) {
+                    paramStrings.push(getQueryParamValue(key, (_b = options.skipUrlEncoding) !== null && _b !== void 0 ? _b : false, style, item));
+                }
+            }
+            else if (typeof rawValue === "object") {
+                // For object explode, the name of the query parameter is ignored and we use the object key instead
+                for (const [actualKey, value] of Object.entries(rawValue)) {
+                    paramStrings.push(getQueryParamValue(actualKey, (_c = options.skipUrlEncoding) !== null && _c !== void 0 ? _c : false, style, value));
+                }
+            }
+            else {
+                // Explode doesn't really make sense for primitives
+                throw new Error("explode can only be set to true for objects and arrays");
+            }
+        }
+        else {
+            paramStrings.push(getQueryParamValue(key, (_d = options.skipUrlEncoding) !== null && _d !== void 0 ? _d : false, style, rawValue));
+        }
+    }
+    if (parsedUrl.search !== "") {
+        parsedUrl.search += "&";
+    }
+    parsedUrl.search += paramStrings.join("&");
+    return parsedUrl.toString();
+}
+function buildBaseUrl(endpoint, options) {
+    var _a;
+    if (!options.pathParameters) {
+        return endpoint;
+    }
+    const pathParams = options.pathParameters;
+    for (const [key, param] of Object.entries(pathParams)) {
+        if (param === undefined || param === null) {
+            throw new Error(`Path parameters ${key} must not be undefined or null`);
+        }
+        if (!param.toString || typeof param.toString !== "function") {
+            throw new Error(`Path parameters must be able to be represented as string, ${key} can't`);
+        }
+        let value = param.toISOString !== undefined ? param.toISOString() : String(param);
+        if (!options.skipUrlEncoding) {
+            value = encodeURIComponent(param);
+        }
+        endpoint = (_a = replaceAll(endpoint, `{${key}}`, value)) !== null && _a !== void 0 ? _a : "";
+    }
+    return endpoint;
+}
+function buildRoutePath(routePath, pathParameters, options = {}) {
+    var _a;
+    for (const pathParam of pathParameters) {
+        const allowReserved = typeof pathParam === "object" && ((_a = pathParam.allowReserved) !== null && _a !== void 0 ? _a : false);
+        let value = typeof pathParam === "object" ? pathParam.value : pathParam;
+        if (!options.skipUrlEncoding && !allowReserved) {
+            value = encodeURIComponent(value);
+        }
+        routePath = routePath.replace(/\{[\w-]+\}/, String(value));
+    }
+    return routePath;
+}
+/**
+ * Replace all of the instances of searchValue in value with the provided replaceValue.
+ * @param value - The value to search and replace in.
+ * @param searchValue - The value to search for in the value argument.
+ * @param replaceValue - The value to replace searchValue with in the value argument.
+ * @returns The value where each instance of searchValue was replaced with replacedValue.
+ */
+function replaceAll(value, searchValue, replaceValue) {
+    return !value || !searchValue ? value : value.split(searchValue).join(replaceValue || "");
+}
+//# sourceMappingURL=urlHelpers.js.map
+
+/***/ }),
+
+/***/ 31255:
+/***/ ((__unused_webpack_module, exports) => {
+
+"use strict";
+
+// Copyright (c) Microsoft Corporation.
+// Licensed under the MIT License.
+Object.defineProperty(exports, "__esModule", ({ value: true }));
+exports.DEFAULT_RETRY_POLICY_COUNT = exports.SDK_VERSION = void 0;
+exports.SDK_VERSION = "0.3.0";
+exports.DEFAULT_RETRY_POLICY_COUNT = 3;
+//# sourceMappingURL=constants.js.map
+
+/***/ }),
+
+/***/ 91810:
+/***/ ((__unused_webpack_module, exports, __nccwpck_require__) => {
+
+"use strict";
+
+// Copyright (c) Microsoft Corporation.
+// Licensed under the MIT License.
+Object.defineProperty(exports, "__esModule", ({ value: true }));
+exports.createPipelineFromOptions = createPipelineFromOptions;
+const logPolicy_js_1 = __nccwpck_require__(47129);
+const pipeline_js_1 = __nccwpck_require__(22338);
+const redirectPolicy_js_1 = __nccwpck_require__(92187);
+const userAgentPolicy_js_1 = __nccwpck_require__(91691);
+const decompressResponsePolicy_js_1 = __nccwpck_require__(35035);
+const defaultRetryPolicy_js_1 = __nccwpck_require__(32462);
+const formDataPolicy_js_1 = __nccwpck_require__(14197);
+const checkEnvironment_js_1 = __nccwpck_require__(85086);
+const proxyPolicy_js_1 = __nccwpck_require__(80067);
+const agentPolicy_js_1 = __nccwpck_require__(85366);
+const tlsPolicy_js_1 = __nccwpck_require__(96690);
+const multipartPolicy_js_1 = __nccwpck_require__(27427);
+/**
+ * Create a new pipeline with a default set of customizable policies.
+ * @param options - Options to configure a custom pipeline.
+ */
+function createPipelineFromOptions(options) {
+    const pipeline = (0, pipeline_js_1.createEmptyPipeline)();
+    if (checkEnvironment_js_1.isNodeLike) {
+        if (options.agent) {
+            pipeline.addPolicy((0, agentPolicy_js_1.agentPolicy)(options.agent));
+        }
+        if (options.tlsOptions) {
+            pipeline.addPolicy((0, tlsPolicy_js_1.tlsPolicy)(options.tlsOptions));
+        }
+        pipeline.addPolicy((0, proxyPolicy_js_1.proxyPolicy)(options.proxyOptions));
+        pipeline.addPolicy((0, decompressResponsePolicy_js_1.decompressResponsePolicy)());
+    }
+    pipeline.addPolicy((0, formDataPolicy_js_1.formDataPolicy)(), { beforePolicies: [multipartPolicy_js_1.multipartPolicyName] });
+    pipeline.addPolicy((0, userAgentPolicy_js_1.userAgentPolicy)(options.userAgentOptions));
+    // The multipart policy is added after policies with no phase, so that
+    // policies can be added between it and formDataPolicy to modify
+    // properties (e.g., making the boundary constant in recorded tests).
+    pipeline.addPolicy((0, multipartPolicy_js_1.multipartPolicy)(), { afterPhase: "Deserialize" });
+    pipeline.addPolicy((0, defaultRetryPolicy_js_1.defaultRetryPolicy)(options.retryOptions), { phase: "Retry" });
+    if (checkEnvironment_js_1.isNodeLike) {
+        // Both XHR and Fetch expect to handle redirects automatically,
+        // so only include this policy when we're in Node.
+        pipeline.addPolicy((0, redirectPolicy_js_1.redirectPolicy)(options.redirectOptions), { afterPhase: "Retry" });
+    }
+    pipeline.addPolicy((0, logPolicy_js_1.logPolicy)(options.loggingOptions), { afterPhase: "Sign" });
+    return pipeline;
+}
+//# sourceMappingURL=createPipelineFromOptions.js.map
+
+/***/ }),
+
+/***/ 69468:
+/***/ ((__unused_webpack_module, exports, __nccwpck_require__) => {
+
+"use strict";
+
+// Copyright (c) Microsoft Corporation.
+// Licensed under the MIT License.
+Object.defineProperty(exports, "__esModule", ({ value: true }));
+exports.createDefaultHttpClient = createDefaultHttpClient;
+const nodeHttpClient_js_1 = __nccwpck_require__(21167);
+/**
+ * Create the correct HttpClient for the current environment.
+ */
+function createDefaultHttpClient() {
+    return (0, nodeHttpClient_js_1.createNodeHttpClient)();
+}
+//# sourceMappingURL=defaultHttpClient.js.map
+
+/***/ }),
+
+/***/ 4220:
+/***/ ((__unused_webpack_module, exports) => {
+
+"use strict";
+
+// Copyright (c) Microsoft Corporation.
+// Licensed under the MIT License.
+Object.defineProperty(exports, "__esModule", ({ value: true }));
+exports.createHttpHeaders = createHttpHeaders;
+function normalizeName(name) {
+    return name.toLowerCase();
+}
+function* headerIterator(map) {
+    for (const entry of map.values()) {
+        yield [entry.name, entry.value];
+    }
+}
+class HttpHeadersImpl {
+    constructor(rawHeaders) {
+        this._headersMap = new Map();
+        if (rawHeaders) {
+            for (const headerName of Object.keys(rawHeaders)) {
+                this.set(headerName, rawHeaders[headerName]);
+            }
+        }
+    }
+    /**
+     * Set a header in this collection with the provided name and value. The name is
+     * case-insensitive.
+     * @param name - The name of the header to set. This value is case-insensitive.
+     * @param value - The value of the header to set.
+     */
+    set(name, value) {
+        this._headersMap.set(normalizeName(name), { name, value: String(value).trim() });
+    }
+    /**
+     * Get the header value for the provided header name, or undefined if no header exists in this
+     * collection with the provided name.
+     * @param name - The name of the header. This value is case-insensitive.
+     */
+    get(name) {
+        var _a;
+        return (_a = this._headersMap.get(normalizeName(name))) === null || _a === void 0 ? void 0 : _a.value;
+    }
+    /**
+     * Get whether or not this header collection contains a header entry for the provided header name.
+     * @param name - The name of the header to set. This value is case-insensitive.
+     */
+    has(name) {
+        return this._headersMap.has(normalizeName(name));
+    }
+    /**
+     * Remove the header with the provided headerName.
+     * @param name - The name of the header to remove.
+     */
+    delete(name) {
+        this._headersMap.delete(normalizeName(name));
+    }
+    /**
+     * Get the JSON object representation of this HTTP header collection.
+     */
+    toJSON(options = {}) {
+        const result = {};
+        if (options.preserveCase) {
+            for (const entry of this._headersMap.values()) {
+                result[entry.name] = entry.value;
+            }
+        }
+        else {
+            for (const [normalizedName, entry] of this._headersMap) {
+                result[normalizedName] = entry.value;
+            }
+        }
+        return result;
+    }
+    /**
+     * Get the string representation of this HTTP header collection.
+     */
+    toString() {
+        return JSON.stringify(this.toJSON({ preserveCase: true }));
+    }
+    /**
+     * Iterate over tuples of header [name, value] pairs.
+     */
+    [Symbol.iterator]() {
+        return headerIterator(this._headersMap);
+    }
+}
+/**
+ * Creates an object that satisfies the `HttpHeaders` interface.
+ * @param rawHeaders - A simple object representing initial headers
+ */
+function createHttpHeaders(rawHeaders) {
+    return new HttpHeadersImpl(rawHeaders);
+}
+//# sourceMappingURL=httpHeaders.js.map
+
+/***/ }),
+
+/***/ 41958:
+/***/ ((__unused_webpack_module, exports, __nccwpck_require__) => {
+
+"use strict";
+
+// Copyright (c) Microsoft Corporation.
+// Licensed under the MIT License.
+Object.defineProperty(exports, "__esModule", ({ value: true }));
+exports.createRestError = exports.operationOptionsToRequestParameters = exports.getClient = exports.createDefaultHttpClient = exports.uint8ArrayToString = exports.stringToUint8Array = exports.isRestError = exports.RestError = exports.createEmptyPipeline = exports.createPipelineRequest = exports.createHttpHeaders = exports.TypeSpecRuntimeLogger = exports.setLogLevel = exports.getLogLevel = exports.createClientLogger = exports.AbortError = void 0;
+const tslib_1 = __nccwpck_require__(61860);
+var AbortError_js_1 = __nccwpck_require__(99992);
+Object.defineProperty(exports, "AbortError", ({ enumerable: true, get: function () { return AbortError_js_1.AbortError; } }));
+var logger_js_1 = __nccwpck_require__(18459);
+Object.defineProperty(exports, "createClientLogger", ({ enumerable: true, get: function () { return logger_js_1.createClientLogger; } }));
+Object.defineProperty(exports, "getLogLevel", ({ enumerable: true, get: function () { return logger_js_1.getLogLevel; } }));
+Object.defineProperty(exports, "setLogLevel", ({ enumerable: true, get: function () { return logger_js_1.setLogLevel; } }));
+Object.defineProperty(exports, "TypeSpecRuntimeLogger", ({ enumerable: true, get: function () { return logger_js_1.TypeSpecRuntimeLogger; } }));
+var httpHeaders_js_1 = __nccwpck_require__(4220);
+Object.defineProperty(exports, "createHttpHeaders", ({ enumerable: true, get: function () { return httpHeaders_js_1.createHttpHeaders; } }));
+tslib_1.__exportStar(__nccwpck_require__(92097), exports);
+tslib_1.__exportStar(__nccwpck_require__(43097), exports);
+var pipelineRequest_js_1 = __nccwpck_require__(72305);
+Object.defineProperty(exports, "createPipelineRequest", ({ enumerable: true, get: function () { return pipelineRequest_js_1.createPipelineRequest; } }));
+var pipeline_js_1 = __nccwpck_require__(22338);
+Object.defineProperty(exports, "createEmptyPipeline", ({ enumerable: true, get: function () { return pipeline_js_1.createEmptyPipeline; } }));
+var restError_js_1 = __nccwpck_require__(9758);
+Object.defineProperty(exports, "RestError", ({ enumerable: true, get: function () { return restError_js_1.RestError; } }));
+Object.defineProperty(exports, "isRestError", ({ enumerable: true, get: function () { return restError_js_1.isRestError; } }));
+var bytesEncoding_js_1 = __nccwpck_require__(82921);
+Object.defineProperty(exports, "stringToUint8Array", ({ enumerable: true, get: function () { return bytesEncoding_js_1.stringToUint8Array; } }));
+Object.defineProperty(exports, "uint8ArrayToString", ({ enumerable: true, get: function () { return bytesEncoding_js_1.uint8ArrayToString; } }));
+var defaultHttpClient_js_1 = __nccwpck_require__(69468);
+Object.defineProperty(exports, "createDefaultHttpClient", ({ enumerable: true, get: function () { return defaultHttpClient_js_1.createDefaultHttpClient; } }));
+var getClient_js_1 = __nccwpck_require__(86191);
+Object.defineProperty(exports, "getClient", ({ enumerable: true, get: function () { return getClient_js_1.getClient; } }));
+var operationOptionHelpers_js_1 = __nccwpck_require__(19635);
+Object.defineProperty(exports, "operationOptionsToRequestParameters", ({ enumerable: true, get: function () { return operationOptionHelpers_js_1.operationOptionsToRequestParameters; } }));
+var restError_js_2 = __nccwpck_require__(97332);
+Object.defineProperty(exports, "createRestError", ({ enumerable: true, get: function () { return restError_js_2.createRestError; } }));
+//# sourceMappingURL=index.js.map
+
+/***/ }),
+
+/***/ 3644:
+/***/ ((__unused_webpack_module, exports, __nccwpck_require__) => {
+
+"use strict";
+
+// Copyright (c) Microsoft Corporation.
+// Licensed under the MIT License.
+Object.defineProperty(exports, "__esModule", ({ value: true }));
+exports.logger = void 0;
+const logger_js_1 = __nccwpck_require__(18459);
+exports.logger = (0, logger_js_1.createClientLogger)("ts-http-runtime");
+//# sourceMappingURL=log.js.map
+
+/***/ }),
+
+/***/ 36836:
+/***/ ((__unused_webpack_module, exports, __nccwpck_require__) => {
+
+"use strict";
+
+// Copyright (c) Microsoft Corporation.
+// Licensed under the MIT License.
+Object.defineProperty(exports, "__esModule", ({ value: true }));
+const log_js_1 = __nccwpck_require__(38029);
+const debugEnvVariable = (typeof process !== "undefined" && process.env && process.env.DEBUG) || undefined;
+let enabledString;
+let enabledNamespaces = [];
+let skippedNamespaces = [];
+const debuggers = [];
+if (debugEnvVariable) {
+    enable(debugEnvVariable);
+}
+const debugObj = Object.assign((namespace) => {
+    return createDebugger(namespace);
+}, {
+    enable,
+    enabled,
+    disable,
+    log: log_js_1.log,
+});
+function enable(namespaces) {
+    enabledString = namespaces;
+    enabledNamespaces = [];
+    skippedNamespaces = [];
+    const wildcard = /\*/g;
+    const namespaceList = namespaces.split(",").map((ns) => ns.trim().replace(wildcard, ".*?"));
+    for (const ns of namespaceList) {
+        if (ns.startsWith("-")) {
+            skippedNamespaces.push(new RegExp(`^${ns.substr(1)}$`));
+        }
+        else {
+            enabledNamespaces.push(new RegExp(`^${ns}$`));
+        }
+    }
+    for (const instance of debuggers) {
+        instance.enabled = enabled(instance.namespace);
+    }
+}
+function enabled(namespace) {
+    if (namespace.endsWith("*")) {
+        return true;
+    }
+    for (const skipped of skippedNamespaces) {
+        if (skipped.test(namespace)) {
+            return false;
+        }
+    }
+    for (const enabledNamespace of enabledNamespaces) {
+        if (enabledNamespace.test(namespace)) {
+            return true;
+        }
+    }
+    return false;
+}
+function disable() {
+    const result = enabledString || "";
+    enable("");
+    return result;
+}
+function createDebugger(namespace) {
+    const newDebugger = Object.assign(debug, {
+        enabled: enabled(namespace),
+        destroy,
+        log: debugObj.log,
+        namespace,
+        extend,
+    });
+    function debug(...args) {
+        if (!newDebugger.enabled) {
+            return;
+        }
+        if (args.length > 0) {
+            args[0] = `${namespace} ${args[0]}`;
+        }
+        newDebugger.log(...args);
+    }
+    debuggers.push(newDebugger);
+    return newDebugger;
+}
+function destroy() {
+    const index = debuggers.indexOf(this);
+    if (index >= 0) {
+        debuggers.splice(index, 1);
+        return true;
+    }
+    return false;
+}
+function extend(namespace) {
+    const newDebugger = createDebugger(`${this.namespace}:${namespace}`);
+    newDebugger.log = this.log;
+    return newDebugger;
+}
+exports["default"] = debugObj;
+//# sourceMappingURL=debug.js.map
+
+/***/ }),
+
+/***/ 82490:
+/***/ ((__unused_webpack_module, exports, __nccwpck_require__) => {
+
+"use strict";
+
+// Copyright (c) Microsoft Corporation.
+// Licensed under the MIT License.
+Object.defineProperty(exports, "__esModule", ({ value: true }));
+exports.createLoggerContext = void 0;
+var logger_js_1 = __nccwpck_require__(18459);
+Object.defineProperty(exports, "createLoggerContext", ({ enumerable: true, get: function () { return logger_js_1.createLoggerContext; } }));
+//# sourceMappingURL=internal.js.map
+
+/***/ }),
+
+/***/ 38029:
+/***/ ((__unused_webpack_module, exports, __nccwpck_require__) => {
+
+"use strict";
+
+// Copyright (c) Microsoft Corporation.
+// Licensed under the MIT License.
+Object.defineProperty(exports, "__esModule", ({ value: true }));
+exports.log = log;
+const tslib_1 = __nccwpck_require__(61860);
+const node_os_1 = __nccwpck_require__(48161);
+const node_util_1 = tslib_1.__importDefault(__nccwpck_require__(57975));
+const process = tslib_1.__importStar(__nccwpck_require__(1708));
+function log(message, ...args) {
+    process.stderr.write(`${node_util_1.default.format(message, ...args)}${node_os_1.EOL}`);
+}
+//# sourceMappingURL=log.js.map
+
+/***/ }),
+
+/***/ 18459:
+/***/ ((__unused_webpack_module, exports, __nccwpck_require__) => {
+
+"use strict";
+
+// Copyright (c) Microsoft Corporation.
+// Licensed under the MIT License.
+Object.defineProperty(exports, "__esModule", ({ value: true }));
+exports.TypeSpecRuntimeLogger = void 0;
+exports.createLoggerContext = createLoggerContext;
+exports.setLogLevel = setLogLevel;
+exports.getLogLevel = getLogLevel;
+exports.createClientLogger = createClientLogger;
+const tslib_1 = __nccwpck_require__(61860);
+const debug_js_1 = tslib_1.__importDefault(__nccwpck_require__(36836));
+const TYPESPEC_RUNTIME_LOG_LEVELS = ["verbose", "info", "warning", "error"];
+const levelMap = {
+    verbose: 400,
+    info: 300,
+    warning: 200,
+    error: 100,
+};
+function patchLogMethod(parent, child) {
+    child.log = (...args) => {
+        parent.log(...args);
+    };
+}
+function isTypeSpecRuntimeLogLevel(level) {
+    return TYPESPEC_RUNTIME_LOG_LEVELS.includes(level);
+}
+/**
+ * Creates a logger context base on the provided options.
+ * @param options - The options for creating a logger context.
+ * @returns The logger context.
+ */
+function createLoggerContext(options) {
+    const registeredLoggers = new Set();
+    const logLevelFromEnv = (typeof process !== "undefined" && process.env && process.env[options.logLevelEnvVarName]) ||
+        undefined;
+    let logLevel;
+    const clientLogger = (0, debug_js_1.default)(options.namespace);
+    clientLogger.log = (...args) => {
+        debug_js_1.default.log(...args);
+    };
+    function contextSetLogLevel(level) {
+        if (level && !isTypeSpecRuntimeLogLevel(level)) {
+            throw new Error(`Unknown log level '${level}'. Acceptable values: ${TYPESPEC_RUNTIME_LOG_LEVELS.join(",")}`);
+        }
+        logLevel = level;
+        const enabledNamespaces = [];
+        for (const logger of registeredLoggers) {
+            if (shouldEnable(logger)) {
+                enabledNamespaces.push(logger.namespace);
+            }
+        }
+        debug_js_1.default.enable(enabledNamespaces.join(","));
+    }
+    if (logLevelFromEnv) {
+        // avoid calling setLogLevel because we don't want a mis-set environment variable to crash
+        if (isTypeSpecRuntimeLogLevel(logLevelFromEnv)) {
+            contextSetLogLevel(logLevelFromEnv);
+        }
+        else {
+            console.error(`${options.logLevelEnvVarName} set to unknown log level '${logLevelFromEnv}'; logging is not enabled. Acceptable values: ${TYPESPEC_RUNTIME_LOG_LEVELS.join(", ")}.`);
+        }
+    }
+    function shouldEnable(logger) {
+        return Boolean(logLevel && levelMap[logger.level] <= levelMap[logLevel]);
+    }
+    function createLogger(parent, level) {
+        const logger = Object.assign(parent.extend(level), {
+            level,
+        });
+        patchLogMethod(parent, logger);
+        if (shouldEnable(logger)) {
+            const enabledNamespaces = debug_js_1.default.disable();
+            debug_js_1.default.enable(enabledNamespaces + "," + logger.namespace);
+        }
+        registeredLoggers.add(logger);
+        return logger;
+    }
+    function contextGetLogLevel() {
+        return logLevel;
+    }
+    function contextCreateClientLogger(namespace) {
+        const clientRootLogger = clientLogger.extend(namespace);
+        patchLogMethod(clientLogger, clientRootLogger);
+        return {
+            error: createLogger(clientRootLogger, "error"),
+            warning: createLogger(clientRootLogger, "warning"),
+            info: createLogger(clientRootLogger, "info"),
+            verbose: createLogger(clientRootLogger, "verbose"),
+        };
+    }
+    return {
+        setLogLevel: contextSetLogLevel,
+        getLogLevel: contextGetLogLevel,
+        createClientLogger: contextCreateClientLogger,
+        logger: clientLogger,
+    };
+}
+const context = createLoggerContext({
+    logLevelEnvVarName: "TYPESPEC_RUNTIME_LOG_LEVEL",
+    namespace: "typeSpecRuntime",
+});
+/**
+ * Immediately enables logging at the specified log level. If no level is specified, logging is disabled.
+ * @param level - The log level to enable for logging.
+ * Options from most verbose to least verbose are:
+ * - verbose
+ * - info
+ * - warning
+ * - error
+ */
+// eslint-disable-next-line @typescript-eslint/no-redeclare
+exports.TypeSpecRuntimeLogger = context.logger;
+/**
+ * Retrieves the currently specified log level.
+ */
+function setLogLevel(logLevel) {
+    context.setLogLevel(logLevel);
+}
+/**
+ * Retrieves the currently specified log level.
+ */
+function getLogLevel() {
+    return context.getLogLevel();
+}
+/**
+ * Creates a logger for use by the SDKs that inherits from `TypeSpecRuntimeLogger`.
+ * @param namespace - The name of the SDK package.
+ * @hidden
+ */
+function createClientLogger(namespace) {
+    return context.createClientLogger(namespace);
+}
+//# sourceMappingURL=logger.js.map
+
+/***/ }),
+
+/***/ 21167:
+/***/ ((__unused_webpack_module, exports, __nccwpck_require__) => {
+
+"use strict";
+
+// Copyright (c) Microsoft Corporation.
+// Licensed under the MIT License.
+Object.defineProperty(exports, "__esModule", ({ value: true }));
+exports.getBodyLength = getBodyLength;
+exports.createNodeHttpClient = createNodeHttpClient;
+const tslib_1 = __nccwpck_require__(61860);
+const http = tslib_1.__importStar(__nccwpck_require__(37067));
+const https = tslib_1.__importStar(__nccwpck_require__(44708));
+const zlib = tslib_1.__importStar(__nccwpck_require__(38522));
+const node_stream_1 = __nccwpck_require__(57075);
+const AbortError_js_1 = __nccwpck_require__(99992);
+const httpHeaders_js_1 = __nccwpck_require__(4220);
+const restError_js_1 = __nccwpck_require__(9758);
+const log_js_1 = __nccwpck_require__(3644);
+const sanitizer_js_1 = __nccwpck_require__(7784);
+const DEFAULT_TLS_SETTINGS = {};
+function isReadableStream(body) {
+    return body && typeof body.pipe === "function";
+}
+function isStreamComplete(stream) {
+    if (stream.readable === false) {
+        return Promise.resolve();
+    }
+    return new Promise((resolve) => {
+        const handler = () => {
+            resolve();
+            stream.removeListener("close", handler);
+            stream.removeListener("end", handler);
+            stream.removeListener("error", handler);
+        };
+        stream.on("close", handler);
+        stream.on("end", handler);
+        stream.on("error", handler);
+    });
+}
+function isArrayBuffer(body) {
+    return body && typeof body.byteLength === "number";
+}
+class ReportTransform extends node_stream_1.Transform {
+    // eslint-disable-next-line @typescript-eslint/no-unsafe-function-type
+    _transform(chunk, _encoding, callback) {
+        this.push(chunk);
+        this.loadedBytes += chunk.length;
+        try {
+            this.progressCallback({ loadedBytes: this.loadedBytes });
+            callback();
+        }
+        catch (e) {
+            callback(e);
+        }
+    }
+    constructor(progressCallback) {
+        super();
+        this.loadedBytes = 0;
+        this.progressCallback = progressCallback;
+    }
+}
+/**
+ * A HttpClient implementation that uses Node's "https" module to send HTTPS requests.
+ * @internal
+ */
+class NodeHttpClient {
+    constructor() {
+        this.cachedHttpsAgents = new WeakMap();
+    }
+    /**
+     * Makes a request over an underlying transport layer and returns the response.
+     * @param request - The request to be made.
+     */
+    async sendRequest(request) {
+        var _a, _b, _c;
+        const abortController = new AbortController();
+        let abortListener;
+        if (request.abortSignal) {
+            if (request.abortSignal.aborted) {
+                throw new AbortError_js_1.AbortError("The operation was aborted. Request has already been canceled.");
+            }
+            abortListener = (event) => {
+                if (event.type === "abort") {
+                    abortController.abort();
+                }
+            };
+            request.abortSignal.addEventListener("abort", abortListener);
+        }
+        let timeoutId;
+        if (request.timeout > 0) {
+            timeoutId = setTimeout(() => {
+                const sanitizer = new sanitizer_js_1.Sanitizer();
+                log_js_1.logger.info(`request to '${sanitizer.sanitizeUrl(request.url)}' timed out. canceling...`);
+                abortController.abort();
+            }, request.timeout);
+        }
+        const acceptEncoding = request.headers.get("Accept-Encoding");
+        const shouldDecompress = (acceptEncoding === null || acceptEncoding === void 0 ? void 0 : acceptEncoding.includes("gzip")) || (acceptEncoding === null || acceptEncoding === void 0 ? void 0 : acceptEncoding.includes("deflate"));
+        let body = typeof request.body === "function" ? request.body() : request.body;
+        if (body && !request.headers.has("Content-Length")) {
+            const bodyLength = getBodyLength(body);
+            if (bodyLength !== null) {
+                request.headers.set("Content-Length", bodyLength);
+            }
+        }
+        let responseStream;
+        try {
+            if (body && request.onUploadProgress) {
+                const onUploadProgress = request.onUploadProgress;
+                const uploadReportStream = new ReportTransform(onUploadProgress);
+                uploadReportStream.on("error", (e) => {
+                    log_js_1.logger.error("Error in upload progress", e);
+                });
+                if (isReadableStream(body)) {
+                    body.pipe(uploadReportStream);
+                }
+                else {
+                    uploadReportStream.end(body);
+                }
+                body = uploadReportStream;
+            }
+            const res = await this.makeRequest(request, abortController, body);
+            if (timeoutId !== undefined) {
+                clearTimeout(timeoutId);
+            }
+            const headers = getResponseHeaders(res);
+            const status = (_a = res.statusCode) !== null && _a !== void 0 ? _a : 0;
+            const response = {
+                status,
+                headers,
+                request,
+            };
+            // Responses to HEAD must not have a body.
+            // If they do return a body, that body must be ignored.
+            if (request.method === "HEAD") {
+                // call resume() and not destroy() to avoid closing the socket
+                // and losing keep alive
+                res.resume();
+                return response;
+            }
+            responseStream = shouldDecompress ? getDecodedResponseStream(res, headers) : res;
+            const onDownloadProgress = request.onDownloadProgress;
+            if (onDownloadProgress) {
+                const downloadReportStream = new ReportTransform(onDownloadProgress);
+                downloadReportStream.on("error", (e) => {
+                    log_js_1.logger.error("Error in download progress", e);
+                });
+                responseStream.pipe(downloadReportStream);
+                responseStream = downloadReportStream;
+            }
+            if (
+            // Value of POSITIVE_INFINITY in streamResponseStatusCodes is considered as any status code
+            ((_b = request.streamResponseStatusCodes) === null || _b === void 0 ? void 0 : _b.has(Number.POSITIVE_INFINITY)) ||
+                ((_c = request.streamResponseStatusCodes) === null || _c === void 0 ? void 0 : _c.has(response.status))) {
+                response.readableStreamBody = responseStream;
+            }
+            else {
+                response.bodyAsText = await streamToText(responseStream);
+            }
+            return response;
+        }
+        finally {
+            // clean up event listener
+            if (request.abortSignal && abortListener) {
+                let uploadStreamDone = Promise.resolve();
+                if (isReadableStream(body)) {
+                    uploadStreamDone = isStreamComplete(body);
+                }
+                let downloadStreamDone = Promise.resolve();
+                if (isReadableStream(responseStream)) {
+                    downloadStreamDone = isStreamComplete(responseStream);
+                }
+                Promise.all([uploadStreamDone, downloadStreamDone])
+                    .then(() => {
+                    var _a;
+                    // eslint-disable-next-line promise/always-return
+                    if (abortListener) {
+                        (_a = request.abortSignal) === null || _a === void 0 ? void 0 : _a.removeEventListener("abort", abortListener);
+                    }
+                })
+                    .catch((e) => {
+                    log_js_1.logger.warning("Error when cleaning up abortListener on httpRequest", e);
+                });
+            }
+        }
+    }
+    makeRequest(request, abortController, body) {
+        var _a;
+        const url = new URL(request.url);
+        const isInsecure = url.protocol !== "https:";
+        if (isInsecure && !request.allowInsecureConnection) {
+            throw new Error(`Cannot connect to ${request.url} while allowInsecureConnection is false.`);
+        }
+        const agent = (_a = request.agent) !== null && _a !== void 0 ? _a : this.getOrCreateAgent(request, isInsecure);
+        const options = Object.assign({ agent, hostname: url.hostname, path: `${url.pathname}${url.search}`, port: url.port, method: request.method, headers: request.headers.toJSON({ preserveCase: true }) }, request.requestOverrides);
+        return new Promise((resolve, reject) => {
+            const req = isInsecure ? http.request(options, resolve) : https.request(options, resolve);
+            req.once("error", (err) => {
+                var _a;
+                reject(new restError_js_1.RestError(err.message, { code: (_a = err.code) !== null && _a !== void 0 ? _a : restError_js_1.RestError.REQUEST_SEND_ERROR, request }));
+            });
+            abortController.signal.addEventListener("abort", () => {
+                const abortError = new AbortError_js_1.AbortError("The operation was aborted. Rejecting from abort signal callback while making request.");
+                req.destroy(abortError);
+                reject(abortError);
+            });
+            if (body && isReadableStream(body)) {
+                body.pipe(req);
+            }
+            else if (body) {
+                if (typeof body === "string" || Buffer.isBuffer(body)) {
+                    req.end(body);
+                }
+                else if (isArrayBuffer(body)) {
+                    req.end(ArrayBuffer.isView(body) ? Buffer.from(body.buffer) : Buffer.from(body));
+                }
+                else {
+                    log_js_1.logger.error("Unrecognized body type", body);
+                    reject(new restError_js_1.RestError("Unrecognized body type"));
+                }
+            }
+            else {
+                // streams don't like "undefined" being passed as data
+                req.end();
+            }
+        });
+    }
+    getOrCreateAgent(request, isInsecure) {
+        var _a;
+        const disableKeepAlive = request.disableKeepAlive;
+        // Handle Insecure requests first
+        if (isInsecure) {
+            if (disableKeepAlive) {
+                // keepAlive:false is the default so we don't need a custom Agent
+                return http.globalAgent;
+            }
+            if (!this.cachedHttpAgent) {
+                // If there is no cached agent create a new one and cache it.
+                this.cachedHttpAgent = new http.Agent({ keepAlive: true });
+            }
+            return this.cachedHttpAgent;
+        }
+        else {
+            if (disableKeepAlive && !request.tlsSettings) {
+                // When there are no tlsSettings and keepAlive is false
+                // we don't need a custom agent
+                return https.globalAgent;
+            }
+            // We use the tlsSettings to index cached clients
+            const tlsSettings = (_a = request.tlsSettings) !== null && _a !== void 0 ? _a : DEFAULT_TLS_SETTINGS;
+            // Get the cached agent or create a new one with the
+            // provided values for keepAlive and tlsSettings
+            let agent = this.cachedHttpsAgents.get(tlsSettings);
+            if (agent && agent.options.keepAlive === !disableKeepAlive) {
+                return agent;
+            }
+            log_js_1.logger.info("No cached TLS Agent exist, creating a new Agent");
+            agent = new https.Agent(Object.assign({ 
+                // keepAlive is true if disableKeepAlive is false.
+                keepAlive: !disableKeepAlive }, tlsSettings));
+            this.cachedHttpsAgents.set(tlsSettings, agent);
+            return agent;
+        }
+    }
+}
+function getResponseHeaders(res) {
+    const headers = (0, httpHeaders_js_1.createHttpHeaders)();
+    for (const header of Object.keys(res.headers)) {
+        const value = res.headers[header];
+        if (Array.isArray(value)) {
+            if (value.length > 0) {
+                headers.set(header, value[0]);
+            }
+        }
+        else if (value) {
+            headers.set(header, value);
+        }
+    }
+    return headers;
+}
+function getDecodedResponseStream(stream, headers) {
+    const contentEncoding = headers.get("Content-Encoding");
+    if (contentEncoding === "gzip") {
+        const unzip = zlib.createGunzip();
+        stream.pipe(unzip);
+        return unzip;
+    }
+    else if (contentEncoding === "deflate") {
+        const inflate = zlib.createInflate();
+        stream.pipe(inflate);
+        return inflate;
+    }
+    return stream;
+}
+function streamToText(stream) {
+    return new Promise((resolve, reject) => {
+        const buffer = [];
+        stream.on("data", (chunk) => {
+            if (Buffer.isBuffer(chunk)) {
+                buffer.push(chunk);
+            }
+            else {
+                buffer.push(Buffer.from(chunk));
+            }
+        });
+        stream.on("end", () => {
+            resolve(Buffer.concat(buffer).toString("utf8"));
+        });
+        stream.on("error", (e) => {
+            if (e && (e === null || e === void 0 ? void 0 : e.name) === "AbortError") {
+                reject(e);
+            }
+            else {
+                reject(new restError_js_1.RestError(`Error reading response as text: ${e.message}`, {
+                    code: restError_js_1.RestError.PARSE_ERROR,
+                }));
+            }
+        });
+    });
+}
+/** @internal */
+function getBodyLength(body) {
+    if (!body) {
+        return 0;
+    }
+    else if (Buffer.isBuffer(body)) {
+        return body.length;
+    }
+    else if (isReadableStream(body)) {
+        return null;
+    }
+    else if (isArrayBuffer(body)) {
+        return body.byteLength;
+    }
+    else if (typeof body === "string") {
+        return Buffer.from(body).length;
+    }
+    else {
+        return null;
+    }
+}
+/**
+ * Create a new HttpClient instance for the NodeJS environment.
+ * @internal
+ */
+function createNodeHttpClient() {
+    return new NodeHttpClient();
+}
+//# sourceMappingURL=nodeHttpClient.js.map
+
+/***/ }),
+
+/***/ 22338:
+/***/ ((__unused_webpack_module, exports) => {
+
+"use strict";
+
+// Copyright (c) Microsoft Corporation.
+// Licensed under the MIT License.
+Object.defineProperty(exports, "__esModule", ({ value: true }));
+exports.createEmptyPipeline = createEmptyPipeline;
+const ValidPhaseNames = new Set(["Deserialize", "Serialize", "Retry", "Sign"]);
+/**
+ * A private implementation of Pipeline.
+ * Do not export this class from the package.
+ * @internal
+ */
+class HttpPipeline {
+    constructor(policies) {
+        var _a;
+        this._policies = [];
+        this._policies = (_a = policies === null || policies === void 0 ? void 0 : policies.slice(0)) !== null && _a !== void 0 ? _a : [];
+        this._orderedPolicies = undefined;
+    }
+    addPolicy(policy, options = {}) {
+        if (options.phase && options.afterPhase) {
+            throw new Error("Policies inside a phase cannot specify afterPhase.");
+        }
+        if (options.phase && !ValidPhaseNames.has(options.phase)) {
+            throw new Error(`Invalid phase name: ${options.phase}`);
+        }
+        if (options.afterPhase && !ValidPhaseNames.has(options.afterPhase)) {
+            throw new Error(`Invalid afterPhase name: ${options.afterPhase}`);
+        }
+        this._policies.push({
+            policy,
+            options,
+        });
+        this._orderedPolicies = undefined;
+    }
+    removePolicy(options) {
+        const removedPolicies = [];
+        this._policies = this._policies.filter((policyDescriptor) => {
+            if ((options.name && policyDescriptor.policy.name === options.name) ||
+                (options.phase && policyDescriptor.options.phase === options.phase)) {
+                removedPolicies.push(policyDescriptor.policy);
+                return false;
+            }
+            else {
+                return true;
+            }
+        });
+        this._orderedPolicies = undefined;
+        return removedPolicies;
+    }
+    sendRequest(httpClient, request) {
+        const policies = this.getOrderedPolicies();
+        const pipeline = policies.reduceRight((next, policy) => {
+            return (req) => {
+                return policy.sendRequest(req, next);
+            };
+        }, (req) => httpClient.sendRequest(req));
+        return pipeline(request);
+    }
+    getOrderedPolicies() {
+        if (!this._orderedPolicies) {
+            this._orderedPolicies = this.orderPolicies();
+        }
+        return this._orderedPolicies;
+    }
+    clone() {
+        return new HttpPipeline(this._policies);
+    }
+    static create() {
+        return new HttpPipeline();
+    }
+    orderPolicies() {
+        /**
+         * The goal of this method is to reliably order pipeline policies
+         * based on their declared requirements when they were added.
+         *
+         * Order is first determined by phase:
+         *
+         * 1. Serialize Phase
+         * 2. Policies not in a phase
+         * 3. Deserialize Phase
+         * 4. Retry Phase
+         * 5. Sign Phase
+         *
+         * Within each phase, policies are executed in the order
+         * they were added unless they were specified to execute
+         * before/after other policies or after a particular phase.
+         *
+         * To determine the final order, we will walk the policy list
+         * in phase order multiple times until all dependencies are
+         * satisfied.
+         *
+         * `afterPolicies` are the set of policies that must be
+         * executed before a given policy. This requirement is
+         * considered satisfied when each of the listed policies
+         * have been scheduled.
+         *
+         * `beforePolicies` are the set of policies that must be
+         * executed after a given policy. Since this dependency
+         * can be expressed by converting it into a equivalent
+         * `afterPolicies` declarations, they are normalized
+         * into that form for simplicity.
+         *
+         * An `afterPhase` dependency is considered satisfied when all
+         * policies in that phase have scheduled.
+         *
+         */
+        const result = [];
+        // Track all policies we know about.
+        const policyMap = new Map();
+        function createPhase(name) {
+            return {
+                name,
+                policies: new Set(),
+                hasRun: false,
+                hasAfterPolicies: false,
+            };
+        }
+        // Track policies for each phase.
+        const serializePhase = createPhase("Serialize");
+        const noPhase = createPhase("None");
+        const deserializePhase = createPhase("Deserialize");
+        const retryPhase = createPhase("Retry");
+        const signPhase = createPhase("Sign");
+        // a list of phases in order
+        const orderedPhases = [serializePhase, noPhase, deserializePhase, retryPhase, signPhase];
+        // Small helper function to map phase name to each Phase
+        function getPhase(phase) {
+            if (phase === "Retry") {
+                return retryPhase;
+            }
+            else if (phase === "Serialize") {
+                return serializePhase;
+            }
+            else if (phase === "Deserialize") {
+                return deserializePhase;
+            }
+            else if (phase === "Sign") {
+                return signPhase;
+            }
+            else {
+                return noPhase;
+            }
+        }
+        // First walk each policy and create a node to track metadata.
+        for (const descriptor of this._policies) {
+            const policy = descriptor.policy;
+            const options = descriptor.options;
+            const policyName = policy.name;
+            if (policyMap.has(policyName)) {
+                throw new Error("Duplicate policy names not allowed in pipeline");
+            }
+            const node = {
+                policy,
+                dependsOn: new Set(),
+                dependants: new Set(),
+            };
+            if (options.afterPhase) {
+                node.afterPhase = getPhase(options.afterPhase);
+                node.afterPhase.hasAfterPolicies = true;
+            }
+            policyMap.set(policyName, node);
+            const phase = getPhase(options.phase);
+            phase.policies.add(node);
+        }
+        // Now that each policy has a node, connect dependency references.
+        for (const descriptor of this._policies) {
+            const { policy, options } = descriptor;
+            const policyName = policy.name;
+            const node = policyMap.get(policyName);
+            if (!node) {
+                throw new Error(`Missing node for policy ${policyName}`);
+            }
+            if (options.afterPolicies) {
+                for (const afterPolicyName of options.afterPolicies) {
+                    const afterNode = policyMap.get(afterPolicyName);
+                    if (afterNode) {
+                        // Linking in both directions helps later
+                        // when we want to notify dependants.
+                        node.dependsOn.add(afterNode);
+                        afterNode.dependants.add(node);
+                    }
+                }
+            }
+            if (options.beforePolicies) {
+                for (const beforePolicyName of options.beforePolicies) {
+                    const beforeNode = policyMap.get(beforePolicyName);
+                    if (beforeNode) {
+                        // To execute before another node, make it
+                        // depend on the current node.
+                        beforeNode.dependsOn.add(node);
+                        node.dependants.add(beforeNode);
+                    }
+                }
+            }
+        }
+        function walkPhase(phase) {
+            phase.hasRun = true;
+            // Sets iterate in insertion order
+            for (const node of phase.policies) {
+                if (node.afterPhase && (!node.afterPhase.hasRun || node.afterPhase.policies.size)) {
+                    // If this node is waiting on a phase to complete,
+                    // we need to skip it for now.
+                    // Even if the phase is empty, we should wait for it
+                    // to be walked to avoid re-ordering policies.
+                    continue;
+                }
+                if (node.dependsOn.size === 0) {
+                    // If there's nothing else we're waiting for, we can
+                    // add this policy to the result list.
+                    result.push(node.policy);
+                    // Notify anything that depends on this policy that
+                    // the policy has been scheduled.
+                    for (const dependant of node.dependants) {
+                        dependant.dependsOn.delete(node);
+                    }
+                    policyMap.delete(node.policy.name);
+                    phase.policies.delete(node);
+                }
+            }
+        }
+        function walkPhases() {
+            for (const phase of orderedPhases) {
+                walkPhase(phase);
+                // if the phase isn't complete
+                if (phase.policies.size > 0 && phase !== noPhase) {
+                    if (!noPhase.hasRun) {
+                        // Try running noPhase to see if that unblocks this phase next tick.
+                        // This can happen if a phase that happens before noPhase
+                        // is waiting on a noPhase policy to complete.
+                        walkPhase(noPhase);
+                    }
+                    // Don't proceed to the next phase until this phase finishes.
+                    return;
+                }
+                if (phase.hasAfterPolicies) {
+                    // Run any policies unblocked by this phase
+                    walkPhase(noPhase);
+                }
+            }
+        }
+        // Iterate until we've put every node in the result list.
+        let iteration = 0;
+        while (policyMap.size > 0) {
+            iteration++;
+            const initialResultLength = result.length;
+            // Keep walking each phase in order until we can order every node.
+            walkPhases();
+            // The result list *should* get at least one larger each time
+            // after the first full pass.
+            // Otherwise, we're going to loop forever.
+            if (result.length <= initialResultLength && iteration > 1) {
+                throw new Error("Cannot satisfy policy dependencies due to requirements cycle.");
+            }
+        }
+        return result;
+    }
+}
+/**
+ * Creates a totally empty pipeline.
+ * Useful for testing or creating a custom one.
+ */
+function createEmptyPipeline() {
+    return HttpPipeline.create();
+}
+//# sourceMappingURL=pipeline.js.map
+
+/***/ }),
+
+/***/ 72305:
+/***/ ((__unused_webpack_module, exports, __nccwpck_require__) => {
+
+"use strict";
+
+// Copyright (c) Microsoft Corporation.
+// Licensed under the MIT License.
+Object.defineProperty(exports, "__esModule", ({ value: true }));
+exports.createPipelineRequest = createPipelineRequest;
+const httpHeaders_js_1 = __nccwpck_require__(4220);
+const uuidUtils_js_1 = __nccwpck_require__(5023);
+class PipelineRequestImpl {
+    constructor(options) {
+        var _a, _b, _c, _d, _e, _f, _g;
+        this.url = options.url;
+        this.body = options.body;
+        this.headers = (_a = options.headers) !== null && _a !== void 0 ? _a : (0, httpHeaders_js_1.createHttpHeaders)();
+        this.method = (_b = options.method) !== null && _b !== void 0 ? _b : "GET";
+        this.timeout = (_c = options.timeout) !== null && _c !== void 0 ? _c : 0;
+        this.multipartBody = options.multipartBody;
+        this.formData = options.formData;
+        this.disableKeepAlive = (_d = options.disableKeepAlive) !== null && _d !== void 0 ? _d : false;
+        this.proxySettings = options.proxySettings;
+        this.streamResponseStatusCodes = options.streamResponseStatusCodes;
+        this.withCredentials = (_e = options.withCredentials) !== null && _e !== void 0 ? _e : false;
+        this.abortSignal = options.abortSignal;
+        this.onUploadProgress = options.onUploadProgress;
+        this.onDownloadProgress = options.onDownloadProgress;
+        this.requestId = options.requestId || (0, uuidUtils_js_1.randomUUID)();
+        this.allowInsecureConnection = (_f = options.allowInsecureConnection) !== null && _f !== void 0 ? _f : false;
+        this.enableBrowserStreams = (_g = options.enableBrowserStreams) !== null && _g !== void 0 ? _g : false;
+        this.requestOverrides = options.requestOverrides;
+        this.authSchemes = options.authSchemes;
+    }
+}
+/**
+ * Creates a new pipeline request with the given options.
+ * This method is to allow for the easy setting of default values and not required.
+ * @param options - The options to create the request with.
+ */
+function createPipelineRequest(options) {
+    return new PipelineRequestImpl(options);
+}
+//# sourceMappingURL=pipelineRequest.js.map
+
+/***/ }),
+
+/***/ 85366:
+/***/ ((__unused_webpack_module, exports) => {
+
+"use strict";
+
+// Copyright (c) Microsoft Corporation.
+// Licensed under the MIT License.
+Object.defineProperty(exports, "__esModule", ({ value: true }));
+exports.agentPolicyName = void 0;
+exports.agentPolicy = agentPolicy;
+/**
+ * Name of the Agent Policy
+ */
+exports.agentPolicyName = "agentPolicy";
+/**
+ * Gets a pipeline policy that sets http.agent
+ */
+function agentPolicy(agent) {
+    return {
+        name: exports.agentPolicyName,
+        sendRequest: async (req, next) => {
+            // Users may define an agent on the request, honor it over the client level one
+            if (!req.agent) {
+                req.agent = agent;
+            }
+            return next(req);
+        },
+    };
+}
+//# sourceMappingURL=agentPolicy.js.map
+
+/***/ }),
+
+/***/ 42095:
+/***/ ((__unused_webpack_module, exports, __nccwpck_require__) => {
+
+"use strict";
+
+// Copyright (c) Microsoft Corporation.
+// Licensed under the MIT License.
+Object.defineProperty(exports, "__esModule", ({ value: true }));
+exports.apiKeyAuthenticationPolicyName = void 0;
+exports.apiKeyAuthenticationPolicy = apiKeyAuthenticationPolicy;
+const checkInsecureConnection_js_1 = __nccwpck_require__(42302);
+/**
+ * Name of the API Key Authentication Policy
+ */
+exports.apiKeyAuthenticationPolicyName = "apiKeyAuthenticationPolicy";
+/**
+ * Gets a pipeline policy that adds API key authentication to requests
+ */
+function apiKeyAuthenticationPolicy(options) {
+    return {
+        name: exports.apiKeyAuthenticationPolicyName,
+        async sendRequest(request, next) {
+            var _a, _b;
+            // Ensure allowInsecureConnection is explicitly set when sending request to non-https URLs
+            (0, checkInsecureConnection_js_1.ensureSecureConnection)(request, options);
+            const scheme = (_b = ((_a = request.authSchemes) !== null && _a !== void 0 ? _a : options.authSchemes)) === null || _b === void 0 ? void 0 : _b.find((x) => x.kind === "apiKey");
+            // Skip adding authentication header if no API key authentication scheme is found
+            if (!scheme) {
+                return next(request);
+            }
+            if (scheme.apiKeyLocation !== "header") {
+                throw new Error(`Unsupported API key location: ${scheme.apiKeyLocation}`);
+            }
+            request.headers.set(scheme.name, options.credential.key);
+            return next(request);
+        },
+    };
+}
+//# sourceMappingURL=apiKeyAuthenticationPolicy.js.map
+
+/***/ }),
+
+/***/ 15756:
+/***/ ((__unused_webpack_module, exports, __nccwpck_require__) => {
+
+"use strict";
+
+// Copyright (c) Microsoft Corporation.
+// Licensed under the MIT License.
+Object.defineProperty(exports, "__esModule", ({ value: true }));
+exports.basicAuthenticationPolicyName = void 0;
+exports.basicAuthenticationPolicy = basicAuthenticationPolicy;
+const bytesEncoding_js_1 = __nccwpck_require__(82921);
+const checkInsecureConnection_js_1 = __nccwpck_require__(42302);
+/**
+ * Name of the Basic Authentication Policy
+ */
+exports.basicAuthenticationPolicyName = "bearerAuthenticationPolicy";
+/**
+ * Gets a pipeline policy that adds basic authentication to requests
+ */
+function basicAuthenticationPolicy(options) {
+    return {
+        name: exports.basicAuthenticationPolicyName,
+        async sendRequest(request, next) {
+            var _a, _b;
+            // Ensure allowInsecureConnection is explicitly set when sending request to non-https URLs
+            (0, checkInsecureConnection_js_1.ensureSecureConnection)(request, options);
+            const scheme = (_b = ((_a = request.authSchemes) !== null && _a !== void 0 ? _a : options.authSchemes)) === null || _b === void 0 ? void 0 : _b.find((x) => x.kind === "http" && x.scheme === "basic");
+            // Skip adding authentication header if no basic authentication scheme is found
+            if (!scheme) {
+                return next(request);
+            }
+            const { username, password } = options.credential;
+            const headerValue = (0, bytesEncoding_js_1.uint8ArrayToString)((0, bytesEncoding_js_1.stringToUint8Array)(`${username}:${password}`, "utf-8"), "base64");
+            request.headers.set("Authorization", `Basic ${headerValue}`);
+            return next(request);
+        },
+    };
+}
+//# sourceMappingURL=basicAuthenticationPolicy.js.map
+
+/***/ }),
+
+/***/ 89709:
+/***/ ((__unused_webpack_module, exports, __nccwpck_require__) => {
+
+"use strict";
+
+// Copyright (c) Microsoft Corporation.
+// Licensed under the MIT License.
+Object.defineProperty(exports, "__esModule", ({ value: true }));
+exports.bearerAuthenticationPolicyName = void 0;
+exports.bearerAuthenticationPolicy = bearerAuthenticationPolicy;
+const checkInsecureConnection_js_1 = __nccwpck_require__(42302);
+/**
+ * Name of the Bearer Authentication Policy
+ */
+exports.bearerAuthenticationPolicyName = "bearerAuthenticationPolicy";
+/**
+ * Gets a pipeline policy that adds bearer token authentication to requests
+ */
+function bearerAuthenticationPolicy(options) {
+    return {
+        name: exports.bearerAuthenticationPolicyName,
+        async sendRequest(request, next) {
+            var _a, _b;
+            // Ensure allowInsecureConnection is explicitly set when sending request to non-https URLs
+            (0, checkInsecureConnection_js_1.ensureSecureConnection)(request, options);
+            const scheme = (_b = ((_a = request.authSchemes) !== null && _a !== void 0 ? _a : options.authSchemes)) === null || _b === void 0 ? void 0 : _b.find((x) => x.kind === "http" && x.scheme === "bearer");
+            // Skip adding authentication header if no bearer authentication scheme is found
+            if (!scheme) {
+                return next(request);
+            }
+            const token = await options.credential.getBearerToken({
+                abortSignal: request.abortSignal,
+            });
+            request.headers.set("Authorization", `Bearer ${token}`);
+            return next(request);
+        },
+    };
+}
+//# sourceMappingURL=bearerAuthenticationPolicy.js.map
+
+/***/ }),
+
+/***/ 42302:
+/***/ ((__unused_webpack_module, exports, __nccwpck_require__) => {
+
+"use strict";
+
+// Copyright (c) Microsoft Corporation.
+// Licensed under the MIT License.
+Object.defineProperty(exports, "__esModule", ({ value: true }));
+exports.ensureSecureConnection = ensureSecureConnection;
+const log_js_1 = __nccwpck_require__(3644);
+// Ensure the warining is only emitted once
+let insecureConnectionWarningEmmitted = false;
+/**
+ * Checks if the request is allowed to be sent over an insecure connection.
+ *
+ * A request is allowed to be sent over an insecure connection when:
+ * - The `allowInsecureConnection` option is set to `true`.
+ * - The request has the `allowInsecureConnection` property set to `true`.
+ * - The request is being sent to `localhost` or `127.0.0.1`
+ */
+function allowInsecureConnection(request, options) {
+    if (options.allowInsecureConnection && request.allowInsecureConnection) {
+        const url = new URL(request.url);
+        if (url.hostname === "localhost" || url.hostname === "127.0.0.1") {
+            return true;
+        }
+    }
+    return false;
+}
+/**
+ * Logs a warning about sending a token over an insecure connection.
+ *
+ * This function will emit a node warning once, but log the warning every time.
+ */
+function emitInsecureConnectionWarning() {
+    const warning = "Sending token over insecure transport. Assume any token issued is compromised.";
+    log_js_1.logger.warning(warning);
+    if (typeof (process === null || process === void 0 ? void 0 : process.emitWarning) === "function" && !insecureConnectionWarningEmmitted) {
+        insecureConnectionWarningEmmitted = true;
+        process.emitWarning(warning);
+    }
+}
+/**
+ * Ensures that authentication is only allowed over HTTPS unless explicitly allowed.
+ * Throws an error if the connection is not secure and not explicitly allowed.
+ */
+function ensureSecureConnection(request, options) {
+    if (!request.url.toLowerCase().startsWith("https://")) {
+        if (allowInsecureConnection(request, options)) {
+            emitInsecureConnectionWarning();
+        }
+        else {
+            throw new Error("Authentication is not permitted for non-TLS protected (non-https) URLs when allowInsecureConnection is false.");
+        }
+    }
+}
+//# sourceMappingURL=checkInsecureConnection.js.map
+
+/***/ }),
+
+/***/ 20219:
+/***/ ((__unused_webpack_module, exports, __nccwpck_require__) => {
+
+"use strict";
+
+// Copyright (c) Microsoft Corporation.
+// Licensed under the MIT License.
+Object.defineProperty(exports, "__esModule", ({ value: true }));
+exports.oauth2AuthenticationPolicyName = void 0;
+exports.oauth2AuthenticationPolicy = oauth2AuthenticationPolicy;
+const checkInsecureConnection_js_1 = __nccwpck_require__(42302);
+/**
+ * Name of the OAuth2 Authentication Policy
+ */
+exports.oauth2AuthenticationPolicyName = "oauth2AuthenticationPolicy";
+/**
+ * Gets a pipeline policy that adds authorization header from OAuth2 schemes
+ */
+function oauth2AuthenticationPolicy(options) {
+    return {
+        name: exports.oauth2AuthenticationPolicyName,
+        async sendRequest(request, next) {
+            var _a, _b;
+            // Ensure allowInsecureConnection is explicitly set when sending request to non-https URLs
+            (0, checkInsecureConnection_js_1.ensureSecureConnection)(request, options);
+            const scheme = (_b = ((_a = request.authSchemes) !== null && _a !== void 0 ? _a : options.authSchemes)) === null || _b === void 0 ? void 0 : _b.find((x) => x.kind === "oauth2");
+            // Skip adding authentication header if no OAuth2 authentication scheme is found
+            if (!scheme) {
+                return next(request);
+            }
+            const token = await options.credential.getOAuth2Token(scheme.flows, {
+                abortSignal: request.abortSignal,
+            });
+            request.headers.set("Authorization", `Bearer ${token}`);
+            return next(request);
+        },
+    };
+}
+//# sourceMappingURL=oauth2AuthenticationPolicy.js.map
+
+/***/ }),
+
+/***/ 35035:
+/***/ ((__unused_webpack_module, exports) => {
+
+"use strict";
+
+// Copyright (c) Microsoft Corporation.
+// Licensed under the MIT License.
+Object.defineProperty(exports, "__esModule", ({ value: true }));
+exports.decompressResponsePolicyName = void 0;
+exports.decompressResponsePolicy = decompressResponsePolicy;
+/**
+ * The programmatic identifier of the decompressResponsePolicy.
+ */
+exports.decompressResponsePolicyName = "decompressResponsePolicy";
+/**
+ * A policy to enable response decompression according to Accept-Encoding header
+ * https://developer.mozilla.org/en-US/docs/Web/HTTP/Headers/Accept-Encoding
+ */
+function decompressResponsePolicy() {
+    return {
+        name: exports.decompressResponsePolicyName,
+        async sendRequest(request, next) {
+            // HEAD requests have no body
+            if (request.method !== "HEAD") {
+                request.headers.set("Accept-Encoding", "gzip,deflate");
+            }
+            return next(request);
+        },
+    };
+}
+//# sourceMappingURL=decompressResponsePolicy.js.map
+
+/***/ }),
+
+/***/ 32462:
+/***/ ((__unused_webpack_module, exports, __nccwpck_require__) => {
+
+"use strict";
+
+// Copyright (c) Microsoft Corporation.
+// Licensed under the MIT License.
+Object.defineProperty(exports, "__esModule", ({ value: true }));
+exports.defaultRetryPolicyName = void 0;
+exports.defaultRetryPolicy = defaultRetryPolicy;
+const exponentialRetryStrategy_js_1 = __nccwpck_require__(98102);
+const throttlingRetryStrategy_js_1 = __nccwpck_require__(21112);
+const retryPolicy_js_1 = __nccwpck_require__(43345);
+const constants_js_1 = __nccwpck_require__(31255);
+/**
+ * Name of the {@link defaultRetryPolicy}
+ */
+exports.defaultRetryPolicyName = "defaultRetryPolicy";
+/**
+ * A policy that retries according to three strategies:
+ * - When the server sends a 429 response with a Retry-After header.
+ * - When there are errors in the underlying transport layer (e.g. DNS lookup failures).
+ * - Or otherwise if the outgoing request fails, it will retry with an exponentially increasing delay.
+ */
+function defaultRetryPolicy(options = {}) {
+    var _a;
+    return {
+        name: exports.defaultRetryPolicyName,
+        sendRequest: (0, retryPolicy_js_1.retryPolicy)([(0, throttlingRetryStrategy_js_1.throttlingRetryStrategy)(), (0, exponentialRetryStrategy_js_1.exponentialRetryStrategy)(options)], {
+            maxRetries: (_a = options.maxRetries) !== null && _a !== void 0 ? _a : constants_js_1.DEFAULT_RETRY_POLICY_COUNT,
+        }).sendRequest,
+    };
+}
+//# sourceMappingURL=defaultRetryPolicy.js.map
+
+/***/ }),
+
+/***/ 74656:
+/***/ ((__unused_webpack_module, exports, __nccwpck_require__) => {
+
+"use strict";
+
+// Copyright (c) Microsoft Corporation.
+// Licensed under the MIT License.
+Object.defineProperty(exports, "__esModule", ({ value: true }));
+exports.exponentialRetryPolicyName = void 0;
+exports.exponentialRetryPolicy = exponentialRetryPolicy;
+const exponentialRetryStrategy_js_1 = __nccwpck_require__(98102);
+const retryPolicy_js_1 = __nccwpck_require__(43345);
+const constants_js_1 = __nccwpck_require__(31255);
+/**
+ * The programmatic identifier of the exponentialRetryPolicy.
+ */
+exports.exponentialRetryPolicyName = "exponentialRetryPolicy";
+/**
+ * A policy that attempts to retry requests while introducing an exponentially increasing delay.
+ * @param options - Options that configure retry logic.
+ */
+function exponentialRetryPolicy(options = {}) {
+    var _a;
+    return (0, retryPolicy_js_1.retryPolicy)([
+        (0, exponentialRetryStrategy_js_1.exponentialRetryStrategy)(Object.assign(Object.assign({}, options), { ignoreSystemErrors: true })),
+    ], {
+        maxRetries: (_a = options.maxRetries) !== null && _a !== void 0 ? _a : constants_js_1.DEFAULT_RETRY_POLICY_COUNT,
+    });
+}
+//# sourceMappingURL=exponentialRetryPolicy.js.map
+
+/***/ }),
+
+/***/ 14197:
+/***/ ((__unused_webpack_module, exports, __nccwpck_require__) => {
+
+"use strict";
+
+// Copyright (c) Microsoft Corporation.
+// Licensed under the MIT License.
+Object.defineProperty(exports, "__esModule", ({ value: true }));
+exports.formDataPolicyName = void 0;
+exports.formDataPolicy = formDataPolicy;
+const bytesEncoding_js_1 = __nccwpck_require__(82921);
+const checkEnvironment_js_1 = __nccwpck_require__(85086);
+const httpHeaders_js_1 = __nccwpck_require__(4220);
+/**
+ * The programmatic identifier of the formDataPolicy.
+ */
+exports.formDataPolicyName = "formDataPolicy";
+function formDataToFormDataMap(formData) {
+    var _a;
+    const formDataMap = {};
+    for (const [key, value] of formData.entries()) {
+        (_a = formDataMap[key]) !== null && _a !== void 0 ? _a : (formDataMap[key] = []);
+        formDataMap[key].push(value);
+    }
+    return formDataMap;
+}
+/**
+ * A policy that encodes FormData on the request into the body.
+ */
+function formDataPolicy() {
+    return {
+        name: exports.formDataPolicyName,
+        async sendRequest(request, next) {
+            if (checkEnvironment_js_1.isNodeLike && typeof FormData !== "undefined" && request.body instanceof FormData) {
+                request.formData = formDataToFormDataMap(request.body);
+                request.body = undefined;
+            }
+            if (request.formData) {
+                const contentType = request.headers.get("Content-Type");
+                if (contentType && contentType.indexOf("application/x-www-form-urlencoded") !== -1) {
+                    request.body = wwwFormUrlEncode(request.formData);
+                }
+                else {
+                    await prepareFormData(request.formData, request);
+                }
+                request.formData = undefined;
+            }
+            return next(request);
+        },
+    };
+}
+function wwwFormUrlEncode(formData) {
+    const urlSearchParams = new URLSearchParams();
+    for (const [key, value] of Object.entries(formData)) {
+        if (Array.isArray(value)) {
+            for (const subValue of value) {
+                urlSearchParams.append(key, subValue.toString());
+            }
+        }
+        else {
+            urlSearchParams.append(key, value.toString());
+        }
+    }
+    return urlSearchParams.toString();
+}
+async function prepareFormData(formData, request) {
+    // validate content type (multipart/form-data)
+    const contentType = request.headers.get("Content-Type");
+    if (contentType && !contentType.startsWith("multipart/form-data")) {
+        // content type is specified and is not multipart/form-data. Exit.
+        return;
+    }
+    request.headers.set("Content-Type", contentType !== null && contentType !== void 0 ? contentType : "multipart/form-data");
+    // set body to MultipartRequestBody using content from FormDataMap
+    const parts = [];
+    for (const [fieldName, values] of Object.entries(formData)) {
+        for (const value of Array.isArray(values) ? values : [values]) {
+            if (typeof value === "string") {
+                parts.push({
+                    headers: (0, httpHeaders_js_1.createHttpHeaders)({
+                        "Content-Disposition": `form-data; name="${fieldName}"`,
+                    }),
+                    body: (0, bytesEncoding_js_1.stringToUint8Array)(value, "utf-8"),
+                });
+            }
+            else if (value === undefined || value === null || typeof value !== "object") {
+                throw new Error(`Unexpected value for key ${fieldName}: ${value}. Value should be serialized to string first.`);
+            }
+            else {
+                // using || instead of ?? here since if value.name is empty we should create a file name
+                const fileName = value.name || "blob";
+                const headers = (0, httpHeaders_js_1.createHttpHeaders)();
+                headers.set("Content-Disposition", `form-data; name="${fieldName}"; filename="${fileName}"`);
+                // again, || is used since an empty value.type means the content type is unset
+                headers.set("Content-Type", value.type || "application/octet-stream");
+                parts.push({
+                    headers,
+                    body: value,
+                });
+            }
+        }
+    }
+    request.multipartBody = { parts };
+}
+//# sourceMappingURL=formDataPolicy.js.map
+
+/***/ }),
+
+/***/ 44960:
+/***/ ((__unused_webpack_module, exports, __nccwpck_require__) => {
+
+"use strict";
+
+// Copyright (c) Microsoft Corporation.
+// Licensed under the MIT License.
+Object.defineProperty(exports, "__esModule", ({ value: true }));
+exports.userAgentPolicyName = exports.userAgentPolicy = exports.tlsPolicyName = exports.tlsPolicy = exports.redirectPolicyName = exports.redirectPolicy = exports.getDefaultProxySettings = exports.proxyPolicyName = exports.proxyPolicy = exports.multipartPolicyName = exports.multipartPolicy = exports.logPolicyName = exports.logPolicy = exports.formDataPolicyName = exports.formDataPolicy = exports.throttlingRetryPolicyName = exports.throttlingRetryPolicy = exports.systemErrorRetryPolicyName = exports.systemErrorRetryPolicy = exports.retryPolicy = exports.exponentialRetryPolicyName = exports.exponentialRetryPolicy = exports.defaultRetryPolicyName = exports.defaultRetryPolicy = exports.decompressResponsePolicyName = exports.decompressResponsePolicy = exports.agentPolicyName = exports.agentPolicy = void 0;
+var agentPolicy_js_1 = __nccwpck_require__(85366);
+Object.defineProperty(exports, "agentPolicy", ({ enumerable: true, get: function () { return agentPolicy_js_1.agentPolicy; } }));
+Object.defineProperty(exports, "agentPolicyName", ({ enumerable: true, get: function () { return agentPolicy_js_1.agentPolicyName; } }));
+var decompressResponsePolicy_js_1 = __nccwpck_require__(35035);
+Object.defineProperty(exports, "decompressResponsePolicy", ({ enumerable: true, get: function () { return decompressResponsePolicy_js_1.decompressResponsePolicy; } }));
+Object.defineProperty(exports, "decompressResponsePolicyName", ({ enumerable: true, get: function () { return decompressResponsePolicy_js_1.decompressResponsePolicyName; } }));
+var defaultRetryPolicy_js_1 = __nccwpck_require__(32462);
+Object.defineProperty(exports, "defaultRetryPolicy", ({ enumerable: true, get: function () { return defaultRetryPolicy_js_1.defaultRetryPolicy; } }));
+Object.defineProperty(exports, "defaultRetryPolicyName", ({ enumerable: true, get: function () { return defaultRetryPolicy_js_1.defaultRetryPolicyName; } }));
+var exponentialRetryPolicy_js_1 = __nccwpck_require__(74656);
+Object.defineProperty(exports, "exponentialRetryPolicy", ({ enumerable: true, get: function () { return exponentialRetryPolicy_js_1.exponentialRetryPolicy; } }));
+Object.defineProperty(exports, "exponentialRetryPolicyName", ({ enumerable: true, get: function () { return exponentialRetryPolicy_js_1.exponentialRetryPolicyName; } }));
+var retryPolicy_js_1 = __nccwpck_require__(43345);
+Object.defineProperty(exports, "retryPolicy", ({ enumerable: true, get: function () { return retryPolicy_js_1.retryPolicy; } }));
+var systemErrorRetryPolicy_js_1 = __nccwpck_require__(92418);
+Object.defineProperty(exports, "systemErrorRetryPolicy", ({ enumerable: true, get: function () { return systemErrorRetryPolicy_js_1.systemErrorRetryPolicy; } }));
+Object.defineProperty(exports, "systemErrorRetryPolicyName", ({ enumerable: true, get: function () { return systemErrorRetryPolicy_js_1.systemErrorRetryPolicyName; } }));
+var throttlingRetryPolicy_js_1 = __nccwpck_require__(24728);
+Object.defineProperty(exports, "throttlingRetryPolicy", ({ enumerable: true, get: function () { return throttlingRetryPolicy_js_1.throttlingRetryPolicy; } }));
+Object.defineProperty(exports, "throttlingRetryPolicyName", ({ enumerable: true, get: function () { return throttlingRetryPolicy_js_1.throttlingRetryPolicyName; } }));
+var formDataPolicy_js_1 = __nccwpck_require__(14197);
+Object.defineProperty(exports, "formDataPolicy", ({ enumerable: true, get: function () { return formDataPolicy_js_1.formDataPolicy; } }));
+Object.defineProperty(exports, "formDataPolicyName", ({ enumerable: true, get: function () { return formDataPolicy_js_1.formDataPolicyName; } }));
+var logPolicy_js_1 = __nccwpck_require__(47129);
+Object.defineProperty(exports, "logPolicy", ({ enumerable: true, get: function () { return logPolicy_js_1.logPolicy; } }));
+Object.defineProperty(exports, "logPolicyName", ({ enumerable: true, get: function () { return logPolicy_js_1.logPolicyName; } }));
+var multipartPolicy_js_1 = __nccwpck_require__(27427);
+Object.defineProperty(exports, "multipartPolicy", ({ enumerable: true, get: function () { return multipartPolicy_js_1.multipartPolicy; } }));
+Object.defineProperty(exports, "multipartPolicyName", ({ enumerable: true, get: function () { return multipartPolicy_js_1.multipartPolicyName; } }));
+var proxyPolicy_js_1 = __nccwpck_require__(80067);
+Object.defineProperty(exports, "proxyPolicy", ({ enumerable: true, get: function () { return proxyPolicy_js_1.proxyPolicy; } }));
+Object.defineProperty(exports, "proxyPolicyName", ({ enumerable: true, get: function () { return proxyPolicy_js_1.proxyPolicyName; } }));
+Object.defineProperty(exports, "getDefaultProxySettings", ({ enumerable: true, get: function () { return proxyPolicy_js_1.getDefaultProxySettings; } }));
+var redirectPolicy_js_1 = __nccwpck_require__(92187);
+Object.defineProperty(exports, "redirectPolicy", ({ enumerable: true, get: function () { return redirectPolicy_js_1.redirectPolicy; } }));
+Object.defineProperty(exports, "redirectPolicyName", ({ enumerable: true, get: function () { return redirectPolicy_js_1.redirectPolicyName; } }));
+var tlsPolicy_js_1 = __nccwpck_require__(96690);
+Object.defineProperty(exports, "tlsPolicy", ({ enumerable: true, get: function () { return tlsPolicy_js_1.tlsPolicy; } }));
+Object.defineProperty(exports, "tlsPolicyName", ({ enumerable: true, get: function () { return tlsPolicy_js_1.tlsPolicyName; } }));
+var userAgentPolicy_js_1 = __nccwpck_require__(91691);
+Object.defineProperty(exports, "userAgentPolicy", ({ enumerable: true, get: function () { return userAgentPolicy_js_1.userAgentPolicy; } }));
+Object.defineProperty(exports, "userAgentPolicyName", ({ enumerable: true, get: function () { return userAgentPolicy_js_1.userAgentPolicyName; } }));
+//# sourceMappingURL=internal.js.map
+
+/***/ }),
+
+/***/ 47129:
+/***/ ((__unused_webpack_module, exports, __nccwpck_require__) => {
+
+"use strict";
+
+// Copyright (c) Microsoft Corporation.
+// Licensed under the MIT License.
+Object.defineProperty(exports, "__esModule", ({ value: true }));
+exports.logPolicyName = void 0;
+exports.logPolicy = logPolicy;
+const log_js_1 = __nccwpck_require__(3644);
+const sanitizer_js_1 = __nccwpck_require__(7784);
+/**
+ * The programmatic identifier of the logPolicy.
+ */
+exports.logPolicyName = "logPolicy";
+/**
+ * A policy that logs all requests and responses.
+ * @param options - Options to configure logPolicy.
+ */
+function logPolicy(options = {}) {
+    var _a;
+    const logger = (_a = options.logger) !== null && _a !== void 0 ? _a : log_js_1.logger.info;
+    const sanitizer = new sanitizer_js_1.Sanitizer({
+        additionalAllowedHeaderNames: options.additionalAllowedHeaderNames,
+        additionalAllowedQueryParameters: options.additionalAllowedQueryParameters,
+    });
+    return {
+        name: exports.logPolicyName,
+        async sendRequest(request, next) {
+            if (!logger.enabled) {
+                return next(request);
+            }
+            logger(`Request: ${sanitizer.sanitize(request)}`);
+            const response = await next(request);
+            logger(`Response status code: ${response.status}`);
+            logger(`Headers: ${sanitizer.sanitize(response.headers)}`);
+            return response;
+        },
+    };
+}
+//# sourceMappingURL=logPolicy.js.map
+
+/***/ }),
+
+/***/ 27427:
+/***/ ((__unused_webpack_module, exports, __nccwpck_require__) => {
+
+"use strict";
+
+// Copyright (c) Microsoft Corporation.
+// Licensed under the MIT License.
+Object.defineProperty(exports, "__esModule", ({ value: true }));
+exports.multipartPolicyName = void 0;
+exports.multipartPolicy = multipartPolicy;
+const bytesEncoding_js_1 = __nccwpck_require__(82921);
+const typeGuards_js_1 = __nccwpck_require__(48505);
+const uuidUtils_js_1 = __nccwpck_require__(5023);
+const concat_js_1 = __nccwpck_require__(20547);
+function generateBoundary() {
+    return `----AzSDKFormBoundary${(0, uuidUtils_js_1.randomUUID)()}`;
+}
+function encodeHeaders(headers) {
+    let result = "";
+    for (const [key, value] of headers) {
+        result += `${key}: ${value}\r\n`;
+    }
+    return result;
+}
+function getLength(source) {
+    if (source instanceof Uint8Array) {
+        return source.byteLength;
+    }
+    else if ((0, typeGuards_js_1.isBlob)(source)) {
+        // if was created using createFile then -1 means we have an unknown size
+        return source.size === -1 ? undefined : source.size;
+    }
+    else {
+        return undefined;
+    }
+}
+function getTotalLength(sources) {
+    let total = 0;
+    for (const source of sources) {
+        const partLength = getLength(source);
+        if (partLength === undefined) {
+            return undefined;
+        }
+        else {
+            total += partLength;
+        }
+    }
+    return total;
+}
+async function buildRequestBody(request, parts, boundary) {
+    const sources = [
+        (0, bytesEncoding_js_1.stringToUint8Array)(`--${boundary}`, "utf-8"),
+        ...parts.flatMap((part) => [
+            (0, bytesEncoding_js_1.stringToUint8Array)("\r\n", "utf-8"),
+            (0, bytesEncoding_js_1.stringToUint8Array)(encodeHeaders(part.headers), "utf-8"),
+            (0, bytesEncoding_js_1.stringToUint8Array)("\r\n", "utf-8"),
+            part.body,
+            (0, bytesEncoding_js_1.stringToUint8Array)(`\r\n--${boundary}`, "utf-8"),
+        ]),
+        (0, bytesEncoding_js_1.stringToUint8Array)("--\r\n\r\n", "utf-8"),
+    ];
+    const contentLength = getTotalLength(sources);
+    if (contentLength) {
+        request.headers.set("Content-Length", contentLength);
+    }
+    request.body = await (0, concat_js_1.concat)(sources);
+}
+/**
+ * Name of multipart policy
+ */
+exports.multipartPolicyName = "multipartPolicy";
+const maxBoundaryLength = 70;
+const validBoundaryCharacters = new Set(`abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789'()+,-./:=?`);
+function assertValidBoundary(boundary) {
+    if (boundary.length > maxBoundaryLength) {
+        throw new Error(`Multipart boundary "${boundary}" exceeds maximum length of 70 characters`);
+    }
+    if (Array.from(boundary).some((x) => !validBoundaryCharacters.has(x))) {
+        throw new Error(`Multipart boundary "${boundary}" contains invalid characters`);
+    }
+}
+/**
+ * Pipeline policy for multipart requests
+ */
+function multipartPolicy() {
+    return {
+        name: exports.multipartPolicyName,
+        async sendRequest(request, next) {
+            var _a;
+            if (!request.multipartBody) {
+                return next(request);
+            }
+            if (request.body) {
+                throw new Error("multipartBody and regular body cannot be set at the same time");
+            }
+            let boundary = request.multipartBody.boundary;
+            const contentTypeHeader = (_a = request.headers.get("Content-Type")) !== null && _a !== void 0 ? _a : "multipart/mixed";
+            const parsedHeader = contentTypeHeader.match(/^(multipart\/[^ ;]+)(?:; *boundary=(.+))?$/);
+            if (!parsedHeader) {
+                throw new Error(`Got multipart request body, but content-type header was not multipart: ${contentTypeHeader}`);
+            }
+            const [, contentType, parsedBoundary] = parsedHeader;
+            if (parsedBoundary && boundary && parsedBoundary !== boundary) {
+                throw new Error(`Multipart boundary was specified as ${parsedBoundary} in the header, but got ${boundary} in the request body`);
+            }
+            boundary !== null && boundary !== void 0 ? boundary : (boundary = parsedBoundary);
+            if (boundary) {
+                assertValidBoundary(boundary);
+            }
+            else {
+                boundary = generateBoundary();
+            }
+            request.headers.set("Content-Type", `${contentType}; boundary=${boundary}`);
+            await buildRequestBody(request, request.multipartBody.parts, boundary);
+            request.multipartBody = undefined;
+            return next(request);
+        },
+    };
+}
+//# sourceMappingURL=multipartPolicy.js.map
+
+/***/ }),
+
+/***/ 80067:
+/***/ ((__unused_webpack_module, exports, __nccwpck_require__) => {
+
+"use strict";
+
+// Copyright (c) Microsoft Corporation.
+// Licensed under the MIT License.
+Object.defineProperty(exports, "__esModule", ({ value: true }));
+exports.globalNoProxyList = exports.proxyPolicyName = void 0;
+exports.loadNoProxy = loadNoProxy;
+exports.getDefaultProxySettings = getDefaultProxySettings;
+exports.proxyPolicy = proxyPolicy;
+const https_proxy_agent_1 = __nccwpck_require__(3669);
+const http_proxy_agent_1 = __nccwpck_require__(81970);
+const log_js_1 = __nccwpck_require__(3644);
+const HTTPS_PROXY = "HTTPS_PROXY";
+const HTTP_PROXY = "HTTP_PROXY";
+const ALL_PROXY = "ALL_PROXY";
+const NO_PROXY = "NO_PROXY";
+/**
+ * The programmatic identifier of the proxyPolicy.
+ */
+exports.proxyPolicyName = "proxyPolicy";
+/**
+ * Stores the patterns specified in NO_PROXY environment variable.
+ * @internal
+ */
+exports.globalNoProxyList = [];
+let noProxyListLoaded = false;
+/** A cache of whether a host should bypass the proxy. */
+const globalBypassedMap = new Map();
+function getEnvironmentValue(name) {
+    if (process.env[name]) {
+        return process.env[name];
+    }
+    else if (process.env[name.toLowerCase()]) {
+        return process.env[name.toLowerCase()];
+    }
+    return undefined;
+}
+function loadEnvironmentProxyValue() {
+    if (!process) {
+        return undefined;
+    }
+    const httpsProxy = getEnvironmentValue(HTTPS_PROXY);
+    const allProxy = getEnvironmentValue(ALL_PROXY);
+    const httpProxy = getEnvironmentValue(HTTP_PROXY);
+    return httpsProxy || allProxy || httpProxy;
+}
+/**
+ * Check whether the host of a given `uri` matches any pattern in the no proxy list.
+ * If there's a match, any request sent to the same host shouldn't have the proxy settings set.
+ * This implementation is a port of https://github.com/Azure/azure-sdk-for-net/blob/8cca811371159e527159c7eb65602477898683e2/sdk/core/Azure.Core/src/Pipeline/Internal/HttpEnvironmentProxy.cs#L210
+ */
+function isBypassed(uri, noProxyList, bypassedMap) {
+    if (noProxyList.length === 0) {
+        return false;
+    }
+    const host = new URL(uri).hostname;
+    if (bypassedMap === null || bypassedMap === void 0 ? void 0 : bypassedMap.has(host)) {
+        return bypassedMap.get(host);
+    }
+    let isBypassedFlag = false;
+    for (const pattern of noProxyList) {
+        if (pattern[0] === ".") {
+            // This should match either domain it self or any subdomain or host
+            // .foo.com will match foo.com it self or *.foo.com
+            if (host.endsWith(pattern)) {
+                isBypassedFlag = true;
+            }
+            else {
+                if (host.length === pattern.length - 1 && host === pattern.slice(1)) {
+                    isBypassedFlag = true;
+                }
+            }
+        }
+        else {
+            if (host === pattern) {
+                isBypassedFlag = true;
+            }
+        }
+    }
+    bypassedMap === null || bypassedMap === void 0 ? void 0 : bypassedMap.set(host, isBypassedFlag);
+    return isBypassedFlag;
+}
+function loadNoProxy() {
+    const noProxy = getEnvironmentValue(NO_PROXY);
+    noProxyListLoaded = true;
+    if (noProxy) {
+        return noProxy
+            .split(",")
+            .map((item) => item.trim())
+            .filter((item) => item.length);
+    }
+    return [];
+}
+/**
+ * This method converts a proxy url into `ProxySettings` for use with ProxyPolicy.
+ * If no argument is given, it attempts to parse a proxy URL from the environment
+ * variables `HTTPS_PROXY` or `HTTP_PROXY`.
+ * @param proxyUrl - The url of the proxy to use. May contain authentication information.
+ * @deprecated - Internally this method is no longer necessary when setting proxy information.
+ */
+function getDefaultProxySettings(proxyUrl) {
+    if (!proxyUrl) {
+        proxyUrl = loadEnvironmentProxyValue();
+        if (!proxyUrl) {
+            return undefined;
+        }
+    }
+    const parsedUrl = new URL(proxyUrl);
+    const schema = parsedUrl.protocol ? parsedUrl.protocol + "//" : "";
+    return {
+        host: schema + parsedUrl.hostname,
+        port: Number.parseInt(parsedUrl.port || "80"),
+        username: parsedUrl.username,
+        password: parsedUrl.password,
+    };
+}
+/**
+ * This method attempts to parse a proxy URL from the environment
+ * variables `HTTPS_PROXY` or `HTTP_PROXY`.
+ */
+function getDefaultProxySettingsInternal() {
+    const envProxy = loadEnvironmentProxyValue();
+    return envProxy ? new URL(envProxy) : undefined;
+}
+function getUrlFromProxySettings(settings) {
+    let parsedProxyUrl;
+    try {
+        parsedProxyUrl = new URL(settings.host);
+    }
+    catch (_a) {
+        throw new Error(`Expecting a valid host string in proxy settings, but found "${settings.host}".`);
+    }
+    parsedProxyUrl.port = String(settings.port);
+    if (settings.username) {
+        parsedProxyUrl.username = settings.username;
+    }
+    if (settings.password) {
+        parsedProxyUrl.password = settings.password;
+    }
+    return parsedProxyUrl;
+}
+function setProxyAgentOnRequest(request, cachedAgents, proxyUrl) {
+    // Custom Agent should take precedence so if one is present
+    // we should skip to avoid overwriting it.
+    if (request.agent) {
+        return;
+    }
+    const url = new URL(request.url);
+    const isInsecure = url.protocol !== "https:";
+    if (request.tlsSettings) {
+        log_js_1.logger.warning("TLS settings are not supported in combination with custom Proxy, certificates provided to the client will be ignored.");
+    }
+    const headers = request.headers.toJSON();
+    if (isInsecure) {
+        if (!cachedAgents.httpProxyAgent) {
+            cachedAgents.httpProxyAgent = new http_proxy_agent_1.HttpProxyAgent(proxyUrl, { headers });
+        }
+        request.agent = cachedAgents.httpProxyAgent;
+    }
+    else {
+        if (!cachedAgents.httpsProxyAgent) {
+            cachedAgents.httpsProxyAgent = new https_proxy_agent_1.HttpsProxyAgent(proxyUrl, { headers });
+        }
+        request.agent = cachedAgents.httpsProxyAgent;
+    }
+}
+/**
+ * A policy that allows one to apply proxy settings to all requests.
+ * If not passed static settings, they will be retrieved from the HTTPS_PROXY
+ * or HTTP_PROXY environment variables.
+ * @param proxySettings - ProxySettings to use on each request.
+ * @param options - additional settings, for example, custom NO_PROXY patterns
+ */
+function proxyPolicy(proxySettings, options) {
+    if (!noProxyListLoaded) {
+        exports.globalNoProxyList.push(...loadNoProxy());
+    }
+    const defaultProxy = proxySettings
+        ? getUrlFromProxySettings(proxySettings)
+        : getDefaultProxySettingsInternal();
+    const cachedAgents = {};
+    return {
+        name: exports.proxyPolicyName,
+        async sendRequest(request, next) {
+            var _a;
+            if (!request.proxySettings &&
+                defaultProxy &&
+                !isBypassed(request.url, (_a = options === null || options === void 0 ? void 0 : options.customNoProxyList) !== null && _a !== void 0 ? _a : exports.globalNoProxyList, (options === null || options === void 0 ? void 0 : options.customNoProxyList) ? undefined : globalBypassedMap)) {
+                setProxyAgentOnRequest(request, cachedAgents, defaultProxy);
+            }
+            else if (request.proxySettings) {
+                setProxyAgentOnRequest(request, cachedAgents, getUrlFromProxySettings(request.proxySettings));
+            }
+            return next(request);
+        },
+    };
+}
+//# sourceMappingURL=proxyPolicy.js.map
+
+/***/ }),
+
+/***/ 92187:
+/***/ ((__unused_webpack_module, exports) => {
+
+"use strict";
+
+// Copyright (c) Microsoft Corporation.
+// Licensed under the MIT License.
+Object.defineProperty(exports, "__esModule", ({ value: true }));
+exports.redirectPolicyName = void 0;
+exports.redirectPolicy = redirectPolicy;
+/**
+ * The programmatic identifier of the redirectPolicy.
+ */
+exports.redirectPolicyName = "redirectPolicy";
+/**
+ * Methods that are allowed to follow redirects 301 and 302
+ */
+const allowedRedirect = ["GET", "HEAD"];
+/**
+ * A policy to follow Location headers from the server in order
+ * to support server-side redirection.
+ * In the browser, this policy is not used.
+ * @param options - Options to control policy behavior.
+ */
+function redirectPolicy(options = {}) {
+    const { maxRetries = 20 } = options;
+    return {
+        name: exports.redirectPolicyName,
+        async sendRequest(request, next) {
+            const response = await next(request);
+            return handleRedirect(next, response, maxRetries);
+        },
+    };
+}
+async function handleRedirect(next, response, maxRetries, currentRetries = 0) {
+    const { request, status, headers } = response;
+    const locationHeader = headers.get("location");
+    if (locationHeader &&
+        (status === 300 ||
+            (status === 301 && allowedRedirect.includes(request.method)) ||
+            (status === 302 && allowedRedirect.includes(request.method)) ||
+            (status === 303 && request.method === "POST") ||
+            status === 307) &&
+        currentRetries < maxRetries) {
+        const url = new URL(locationHeader, request.url);
+        request.url = url.toString();
+        // POST request with Status code 303 should be converted into a
+        // redirected GET request if the redirect url is present in the location header
+        if (status === 303) {
+            request.method = "GET";
+            request.headers.delete("Content-Length");
+            delete request.body;
+        }
+        request.headers.delete("Authorization");
+        const res = await next(request);
+        return handleRedirect(next, res, maxRetries, currentRetries + 1);
+    }
+    return response;
+}
+//# sourceMappingURL=redirectPolicy.js.map
+
+/***/ }),
+
+/***/ 43345:
+/***/ ((__unused_webpack_module, exports, __nccwpck_require__) => {
+
+"use strict";
+
+// Copyright (c) Microsoft Corporation.
+// Licensed under the MIT License.
+Object.defineProperty(exports, "__esModule", ({ value: true }));
+exports.retryPolicy = retryPolicy;
+const helpers_js_1 = __nccwpck_require__(77566);
+const AbortError_js_1 = __nccwpck_require__(99992);
+const logger_js_1 = __nccwpck_require__(18459);
+const constants_js_1 = __nccwpck_require__(31255);
+const retryPolicyLogger = (0, logger_js_1.createClientLogger)("ts-http-runtime retryPolicy");
+/**
+ * The programmatic identifier of the retryPolicy.
+ */
+const retryPolicyName = "retryPolicy";
+/**
+ * retryPolicy is a generic policy to enable retrying requests when certain conditions are met
+ */
+function retryPolicy(strategies, options = { maxRetries: constants_js_1.DEFAULT_RETRY_POLICY_COUNT }) {
+    const logger = options.logger || retryPolicyLogger;
+    return {
+        name: retryPolicyName,
+        async sendRequest(request, next) {
+            var _a, _b;
+            let response;
+            let responseError;
+            let retryCount = -1;
+            retryRequest: while (true) {
+                retryCount += 1;
+                response = undefined;
+                responseError = undefined;
+                try {
+                    logger.info(`Retry ${retryCount}: Attempting to send request`, request.requestId);
+                    response = await next(request);
+                    logger.info(`Retry ${retryCount}: Received a response from request`, request.requestId);
+                }
+                catch (e) {
+                    logger.error(`Retry ${retryCount}: Received an error from request`, request.requestId);
+                    // RestErrors are valid targets for the retry strategies.
+                    // If none of the retry strategies can work with them, they will be thrown later in this policy.
+                    // If the received error is not a RestError, it is immediately thrown.
+                    responseError = e;
+                    if (!e || responseError.name !== "RestError") {
+                        throw e;
+                    }
+                    response = responseError.response;
+                }
+                if ((_a = request.abortSignal) === null || _a === void 0 ? void 0 : _a.aborted) {
+                    logger.error(`Retry ${retryCount}: Request aborted.`);
+                    const abortError = new AbortError_js_1.AbortError();
+                    throw abortError;
+                }
+                if (retryCount >= ((_b = options.maxRetries) !== null && _b !== void 0 ? _b : constants_js_1.DEFAULT_RETRY_POLICY_COUNT)) {
+                    logger.info(`Retry ${retryCount}: Maximum retries reached. Returning the last received response, or throwing the last received error.`);
+                    if (responseError) {
+                        throw responseError;
+                    }
+                    else if (response) {
+                        return response;
+                    }
+                    else {
+                        throw new Error("Maximum retries reached with no response or error to throw");
+                    }
+                }
+                logger.info(`Retry ${retryCount}: Processing ${strategies.length} retry strategies.`);
+                strategiesLoop: for (const strategy of strategies) {
+                    const strategyLogger = strategy.logger || logger;
+                    strategyLogger.info(`Retry ${retryCount}: Processing retry strategy ${strategy.name}.`);
+                    const modifiers = strategy.retry({
+                        retryCount,
+                        response,
+                        responseError,
+                    });
+                    if (modifiers.skipStrategy) {
+                        strategyLogger.info(`Retry ${retryCount}: Skipped.`);
+                        continue strategiesLoop;
+                    }
+                    const { errorToThrow, retryAfterInMs, redirectTo } = modifiers;
+                    if (errorToThrow) {
+                        strategyLogger.error(`Retry ${retryCount}: Retry strategy ${strategy.name} throws error:`, errorToThrow);
+                        throw errorToThrow;
+                    }
+                    if (retryAfterInMs || retryAfterInMs === 0) {
+                        strategyLogger.info(`Retry ${retryCount}: Retry strategy ${strategy.name} retries after ${retryAfterInMs}`);
+                        await (0, helpers_js_1.delay)(retryAfterInMs, undefined, { abortSignal: request.abortSignal });
+                        continue retryRequest;
+                    }
+                    if (redirectTo) {
+                        strategyLogger.info(`Retry ${retryCount}: Retry strategy ${strategy.name} redirects to ${redirectTo}`);
+                        request.url = redirectTo;
+                        continue retryRequest;
+                    }
+                }
+                if (responseError) {
+                    logger.info(`None of the retry strategies could work with the received error. Throwing it.`);
+                    throw responseError;
+                }
+                if (response) {
+                    logger.info(`None of the retry strategies could work with the received response. Returning it.`);
+                    return response;
+                }
+                // If all the retries skip and there's no response,
+                // we're still in the retry loop, so a new request will be sent
+                // until `maxRetries` is reached.
+            }
+        },
+    };
+}
+//# sourceMappingURL=retryPolicy.js.map
+
+/***/ }),
+
+/***/ 92418:
+/***/ ((__unused_webpack_module, exports, __nccwpck_require__) => {
+
+"use strict";
+
+// Copyright (c) Microsoft Corporation.
+// Licensed under the MIT License.
+Object.defineProperty(exports, "__esModule", ({ value: true }));
+exports.systemErrorRetryPolicyName = void 0;
+exports.systemErrorRetryPolicy = systemErrorRetryPolicy;
+const exponentialRetryStrategy_js_1 = __nccwpck_require__(98102);
+const retryPolicy_js_1 = __nccwpck_require__(43345);
+const constants_js_1 = __nccwpck_require__(31255);
+/**
+ * Name of the {@link systemErrorRetryPolicy}
+ */
+exports.systemErrorRetryPolicyName = "systemErrorRetryPolicy";
+/**
+ * A retry policy that specifically seeks to handle errors in the
+ * underlying transport layer (e.g. DNS lookup failures) rather than
+ * retryable error codes from the server itself.
+ * @param options - Options that customize the policy.
+ */
+function systemErrorRetryPolicy(options = {}) {
+    var _a;
+    return {
+        name: exports.systemErrorRetryPolicyName,
+        sendRequest: (0, retryPolicy_js_1.retryPolicy)([
+            (0, exponentialRetryStrategy_js_1.exponentialRetryStrategy)(Object.assign(Object.assign({}, options), { ignoreHttpStatusCodes: true })),
+        ], {
+            maxRetries: (_a = options.maxRetries) !== null && _a !== void 0 ? _a : constants_js_1.DEFAULT_RETRY_POLICY_COUNT,
+        }).sendRequest,
+    };
+}
+//# sourceMappingURL=systemErrorRetryPolicy.js.map
+
+/***/ }),
+
+/***/ 24728:
+/***/ ((__unused_webpack_module, exports, __nccwpck_require__) => {
+
+"use strict";
+
+// Copyright (c) Microsoft Corporation.
+// Licensed under the MIT License.
+Object.defineProperty(exports, "__esModule", ({ value: true }));
+exports.throttlingRetryPolicyName = void 0;
+exports.throttlingRetryPolicy = throttlingRetryPolicy;
+const throttlingRetryStrategy_js_1 = __nccwpck_require__(21112);
+const retryPolicy_js_1 = __nccwpck_require__(43345);
+const constants_js_1 = __nccwpck_require__(31255);
+/**
+ * Name of the {@link throttlingRetryPolicy}
+ */
+exports.throttlingRetryPolicyName = "throttlingRetryPolicy";
+/**
+ * A policy that retries when the server sends a 429 response with a Retry-After header.
+ *
+ * To learn more, please refer to
+ * https://learn.microsoft.com/azure/azure-resource-manager/resource-manager-request-limits,
+ * https://learn.microsoft.com/azure/azure-subscription-service-limits and
+ * https://learn.microsoft.com/azure/virtual-machines/troubleshooting/troubleshooting-throttling-errors
+ *
+ * @param options - Options that configure retry logic.
+ */
+function throttlingRetryPolicy(options = {}) {
+    var _a;
+    return {
+        name: exports.throttlingRetryPolicyName,
+        sendRequest: (0, retryPolicy_js_1.retryPolicy)([(0, throttlingRetryStrategy_js_1.throttlingRetryStrategy)()], {
+            maxRetries: (_a = options.maxRetries) !== null && _a !== void 0 ? _a : constants_js_1.DEFAULT_RETRY_POLICY_COUNT,
+        }).sendRequest,
+    };
+}
+//# sourceMappingURL=throttlingRetryPolicy.js.map
+
+/***/ }),
+
+/***/ 96690:
+/***/ ((__unused_webpack_module, exports) => {
+
+"use strict";
+
+// Copyright (c) Microsoft Corporation.
+// Licensed under the MIT License.
+Object.defineProperty(exports, "__esModule", ({ value: true }));
+exports.tlsPolicyName = void 0;
+exports.tlsPolicy = tlsPolicy;
+/**
+ * Name of the TLS Policy
+ */
+exports.tlsPolicyName = "tlsPolicy";
+/**
+ * Gets a pipeline policy that adds the client certificate to the HttpClient agent for authentication.
+ */
+function tlsPolicy(tlsSettings) {
+    return {
+        name: exports.tlsPolicyName,
+        sendRequest: async (req, next) => {
+            // Users may define a request tlsSettings, honor those over the client level one
+            if (!req.tlsSettings) {
+                req.tlsSettings = tlsSettings;
+            }
+            return next(req);
+        },
+    };
+}
+//# sourceMappingURL=tlsPolicy.js.map
+
+/***/ }),
+
+/***/ 91691:
+/***/ ((__unused_webpack_module, exports, __nccwpck_require__) => {
+
+"use strict";
+
+// Copyright (c) Microsoft Corporation.
+// Licensed under the MIT License.
+Object.defineProperty(exports, "__esModule", ({ value: true }));
+exports.userAgentPolicyName = void 0;
+exports.userAgentPolicy = userAgentPolicy;
+const userAgent_js_1 = __nccwpck_require__(62731);
+const UserAgentHeaderName = (0, userAgent_js_1.getUserAgentHeaderName)();
+/**
+ * The programmatic identifier of the userAgentPolicy.
+ */
+exports.userAgentPolicyName = "userAgentPolicy";
+/**
+ * A policy that sets the User-Agent header (or equivalent) to reflect
+ * the library version.
+ * @param options - Options to customize the user agent value.
+ */
+function userAgentPolicy(options = {}) {
+    const userAgentValue = (0, userAgent_js_1.getUserAgentValue)(options.userAgentPrefix);
+    return {
+        name: exports.userAgentPolicyName,
+        async sendRequest(request, next) {
+            if (!request.headers.has(UserAgentHeaderName)) {
+                request.headers.set(UserAgentHeaderName, await userAgentValue);
+            }
+            return next(request);
+        },
+    };
+}
+//# sourceMappingURL=userAgentPolicy.js.map
+
+/***/ }),
+
+/***/ 9758:
+/***/ ((__unused_webpack_module, exports, __nccwpck_require__) => {
+
+"use strict";
+
+// Copyright (c) Microsoft Corporation.
+// Licensed under the MIT License.
+Object.defineProperty(exports, "__esModule", ({ value: true }));
+exports.RestError = void 0;
+exports.isRestError = isRestError;
+const error_js_1 = __nccwpck_require__(52573);
+const inspect_js_1 = __nccwpck_require__(37639);
+const sanitizer_js_1 = __nccwpck_require__(7784);
+const errorSanitizer = new sanitizer_js_1.Sanitizer();
+/**
+ * A custom error type for failed pipeline requests.
+ */
+class RestError extends Error {
+    constructor(message, options = {}) {
+        super(message);
+        this.name = "RestError";
+        this.code = options.code;
+        this.statusCode = options.statusCode;
+        // The request and response may contain sensitive information in the headers or body.
+        // To help prevent this sensitive information being accidentally logged, the request and response
+        // properties are marked as non-enumerable here. This prevents them showing up in the output of
+        // JSON.stringify and console.log.
+        Object.defineProperty(this, "request", { value: options.request, enumerable: false });
+        Object.defineProperty(this, "response", { value: options.response, enumerable: false });
+        // Logging method for util.inspect in Node
+        Object.defineProperty(this, inspect_js_1.custom, {
+            value: () => {
+                // Extract non-enumerable properties and add them back. This is OK since in this output the request and
+                // response get sanitized.
+                return `RestError: ${this.message} \n ${errorSanitizer.sanitize(Object.assign(Object.assign({}, this), { request: this.request, response: this.response }))}`;
+            },
+            enumerable: false,
+        });
+        Object.setPrototypeOf(this, RestError.prototype);
+    }
+}
+exports.RestError = RestError;
+/**
+ * Something went wrong when making the request.
+ * This means the actual request failed for some reason,
+ * such as a DNS issue or the connection being lost.
+ */
+RestError.REQUEST_SEND_ERROR = "REQUEST_SEND_ERROR";
+/**
+ * This means that parsing the response from the server failed.
+ * It may have been malformed.
+ */
+RestError.PARSE_ERROR = "PARSE_ERROR";
+/**
+ * Typeguard for RestError
+ * @param e - Something caught by a catch clause.
+ */
+function isRestError(e) {
+    if (e instanceof RestError) {
+        return true;
+    }
+    return (0, error_js_1.isError)(e) && e.name === "RestError";
+}
+//# sourceMappingURL=restError.js.map
+
+/***/ }),
+
+/***/ 98102:
+/***/ ((__unused_webpack_module, exports, __nccwpck_require__) => {
+
+"use strict";
+
+// Copyright (c) Microsoft Corporation.
+// Licensed under the MIT License.
+Object.defineProperty(exports, "__esModule", ({ value: true }));
+exports.exponentialRetryStrategy = exponentialRetryStrategy;
+exports.isExponentialRetryResponse = isExponentialRetryResponse;
+exports.isSystemError = isSystemError;
+const delay_js_1 = __nccwpck_require__(66776);
+const throttlingRetryStrategy_js_1 = __nccwpck_require__(21112);
+// intervals are in milliseconds
+const DEFAULT_CLIENT_RETRY_INTERVAL = 1000;
+const DEFAULT_CLIENT_MAX_RETRY_INTERVAL = 1000 * 64;
+/**
+ * A retry strategy that retries with an exponentially increasing delay in these two cases:
+ * - When there are errors in the underlying transport layer (e.g. DNS lookup failures).
+ * - Or otherwise if the outgoing request fails (408, greater or equal than 500, except for 501 and 505).
+ */
+function exponentialRetryStrategy(options = {}) {
+    var _a, _b;
+    const retryInterval = (_a = options.retryDelayInMs) !== null && _a !== void 0 ? _a : DEFAULT_CLIENT_RETRY_INTERVAL;
+    const maxRetryInterval = (_b = options.maxRetryDelayInMs) !== null && _b !== void 0 ? _b : DEFAULT_CLIENT_MAX_RETRY_INTERVAL;
+    return {
+        name: "exponentialRetryStrategy",
+        retry({ retryCount, response, responseError }) {
+            const matchedSystemError = isSystemError(responseError);
+            const ignoreSystemErrors = matchedSystemError && options.ignoreSystemErrors;
+            const isExponential = isExponentialRetryResponse(response);
+            const ignoreExponentialResponse = isExponential && options.ignoreHttpStatusCodes;
+            const unknownResponse = response && ((0, throttlingRetryStrategy_js_1.isThrottlingRetryResponse)(response) || !isExponential);
+            if (unknownResponse || ignoreExponentialResponse || ignoreSystemErrors) {
+                return { skipStrategy: true };
+            }
+            if (responseError && !matchedSystemError && !isExponential) {
+                return { errorToThrow: responseError };
+            }
+            return (0, delay_js_1.calculateRetryDelay)(retryCount, {
+                retryDelayInMs: retryInterval,
+                maxRetryDelayInMs: maxRetryInterval,
+            });
+        },
+    };
+}
+/**
+ * A response is a retry response if it has status codes:
+ * - 408, or
+ * - Greater or equal than 500, except for 501 and 505.
+ */
+function isExponentialRetryResponse(response) {
+    return Boolean(response &&
+        response.status !== undefined &&
+        (response.status >= 500 || response.status === 408) &&
+        response.status !== 501 &&
+        response.status !== 505);
+}
+/**
+ * Determines whether an error from a pipeline response was triggered in the network layer.
+ */
+function isSystemError(err) {
+    if (!err) {
+        return false;
+    }
+    return (err.code === "ETIMEDOUT" ||
+        err.code === "ESOCKETTIMEDOUT" ||
+        err.code === "ECONNREFUSED" ||
+        err.code === "ECONNRESET" ||
+        err.code === "ENOENT" ||
+        err.code === "ENOTFOUND");
+}
+//# sourceMappingURL=exponentialRetryStrategy.js.map
+
+/***/ }),
+
+/***/ 21112:
+/***/ ((__unused_webpack_module, exports, __nccwpck_require__) => {
+
+"use strict";
+
+// Copyright (c) Microsoft Corporation.
+// Licensed under the MIT License.
+Object.defineProperty(exports, "__esModule", ({ value: true }));
+exports.isThrottlingRetryResponse = isThrottlingRetryResponse;
+exports.throttlingRetryStrategy = throttlingRetryStrategy;
+const helpers_js_1 = __nccwpck_require__(77566);
+/**
+ * The header that comes back from services representing
+ * the amount of time (minimum) to wait to retry (in seconds or timestamp after which we can retry).
+ */
+const RetryAfterHeader = "Retry-After";
+/**
+ * The headers that come back from services representing
+ * the amount of time (minimum) to wait to retry.
+ *
+ * "retry-after-ms", "x-ms-retry-after-ms" : milliseconds
+ * "Retry-After" : seconds or timestamp
+ */
+const AllRetryAfterHeaders = ["retry-after-ms", "x-ms-retry-after-ms", RetryAfterHeader];
+/**
+ * A response is a throttling retry response if it has a throttling status code (429 or 503),
+ * as long as one of the [ "Retry-After" or "retry-after-ms" or "x-ms-retry-after-ms" ] headers has a valid value.
+ *
+ * Returns the `retryAfterInMs` value if the response is a throttling retry response.
+ * If not throttling retry response, returns `undefined`.
+ *
+ * @internal
+ */
+function getRetryAfterInMs(response) {
+    if (!(response && [429, 503].includes(response.status)))
+        return undefined;
+    try {
+        // Headers: "retry-after-ms", "x-ms-retry-after-ms", "Retry-After"
+        for (const header of AllRetryAfterHeaders) {
+            const retryAfterValue = (0, helpers_js_1.parseHeaderValueAsNumber)(response, header);
+            if (retryAfterValue === 0 || retryAfterValue) {
+                // "Retry-After" header ==> seconds
+                // "retry-after-ms", "x-ms-retry-after-ms" headers ==> milli-seconds
+                const multiplyingFactor = header === RetryAfterHeader ? 1000 : 1;
+                return retryAfterValue * multiplyingFactor; // in milli-seconds
+            }
+        }
+        // RetryAfterHeader ("Retry-After") has a special case where it might be formatted as a date instead of a number of seconds
+        const retryAfterHeader = response.headers.get(RetryAfterHeader);
+        if (!retryAfterHeader)
+            return;
+        const date = Date.parse(retryAfterHeader);
+        const diff = date - Date.now();
+        // negative diff would mean a date in the past, so retry asap with 0 milliseconds
+        return Number.isFinite(diff) ? Math.max(0, diff) : undefined;
+    }
+    catch (_a) {
+        return undefined;
+    }
+}
+/**
+ * A response is a retry response if it has a throttling status code (429 or 503),
+ * as long as one of the [ "Retry-After" or "retry-after-ms" or "x-ms-retry-after-ms" ] headers has a valid value.
+ */
+function isThrottlingRetryResponse(response) {
+    return Number.isFinite(getRetryAfterInMs(response));
+}
+function throttlingRetryStrategy() {
+    return {
+        name: "throttlingRetryStrategy",
+        retry({ response }) {
+            const retryAfterInMs = getRetryAfterInMs(response);
+            if (!Number.isFinite(retryAfterInMs)) {
+                return { skipStrategy: true };
+            }
+            return {
+                retryAfterInMs,
+            };
+        },
+    };
+}
+//# sourceMappingURL=throttlingRetryStrategy.js.map
+
+/***/ }),
+
+/***/ 82921:
+/***/ ((__unused_webpack_module, exports) => {
+
+"use strict";
+
+// Copyright (c) Microsoft Corporation.
+// Licensed under the MIT License.
+Object.defineProperty(exports, "__esModule", ({ value: true }));
+exports.uint8ArrayToString = uint8ArrayToString;
+exports.stringToUint8Array = stringToUint8Array;
+/**
+ * The helper that transforms bytes with specific character encoding into string
+ * @param bytes - the uint8array bytes
+ * @param format - the format we use to encode the byte
+ * @returns a string of the encoded string
+ */
+function uint8ArrayToString(bytes, format) {
+    return Buffer.from(bytes).toString(format);
+}
+/**
+ * The helper that transforms string to specific character encoded bytes array.
+ * @param value - the string to be converted
+ * @param format - the format we use to decode the value
+ * @returns a uint8array
+ */
+function stringToUint8Array(value, format) {
+    return Buffer.from(value, format);
+}
+//# sourceMappingURL=bytesEncoding.js.map
+
+/***/ }),
+
+/***/ 85086:
+/***/ ((__unused_webpack_module, exports) => {
+
+"use strict";
+
+// Copyright (c) Microsoft Corporation.
+// Licensed under the MIT License.
+var _a, _b, _c, _d;
+Object.defineProperty(exports, "__esModule", ({ value: true }));
+exports.isReactNative = exports.isNodeRuntime = exports.isNodeLike = exports.isBun = exports.isDeno = exports.isWebWorker = exports.isBrowser = void 0;
+/**
+ * A constant that indicates whether the environment the code is running is a Web Browser.
+ */
+// eslint-disable-next-line @azure/azure-sdk/ts-no-window
+exports.isBrowser = typeof window !== "undefined" && typeof window.document !== "undefined";
+/**
+ * A constant that indicates whether the environment the code is running is a Web Worker.
+ */
+exports.isWebWorker = typeof self === "object" &&
+    typeof (self === null || self === void 0 ? void 0 : self.importScripts) === "function" &&
+    (((_a = self.constructor) === null || _a === void 0 ? void 0 : _a.name) === "DedicatedWorkerGlobalScope" ||
+        ((_b = self.constructor) === null || _b === void 0 ? void 0 : _b.name) === "ServiceWorkerGlobalScope" ||
+        ((_c = self.constructor) === null || _c === void 0 ? void 0 : _c.name) === "SharedWorkerGlobalScope");
+/**
+ * A constant that indicates whether the environment the code is running is Deno.
+ */
+exports.isDeno = typeof Deno !== "undefined" &&
+    typeof Deno.version !== "undefined" &&
+    typeof Deno.version.deno !== "undefined";
+/**
+ * A constant that indicates whether the environment the code is running is Bun.sh.
+ */
+exports.isBun = typeof Bun !== "undefined" && typeof Bun.version !== "undefined";
+/**
+ * A constant that indicates whether the environment the code is running is a Node.js compatible environment.
+ */
+exports.isNodeLike = typeof globalThis.process !== "undefined" &&
+    Boolean(globalThis.process.version) &&
+    Boolean((_d = globalThis.process.versions) === null || _d === void 0 ? void 0 : _d.node);
+/**
+ * A constant that indicates whether the environment the code is running is Node.JS.
+ */
+exports.isNodeRuntime = exports.isNodeLike && !exports.isBun && !exports.isDeno;
+/**
+ * A constant that indicates whether the environment the code is running is in React-Native.
+ */
+// https://github.com/facebook/react-native/blob/main/packages/react-native/Libraries/Core/setUpNavigator.js
+exports.isReactNative = typeof navigator !== "undefined" && (navigator === null || navigator === void 0 ? void 0 : navigator.product) === "ReactNative";
+//# sourceMappingURL=checkEnvironment.js.map
+
+/***/ }),
+
+/***/ 20547:
+/***/ ((__unused_webpack_module, exports, __nccwpck_require__) => {
+
+"use strict";
+
+// Copyright (c) Microsoft Corporation.
+// Licensed under the MIT License.
+Object.defineProperty(exports, "__esModule", ({ value: true }));
+exports.concat = concat;
+const tslib_1 = __nccwpck_require__(61860);
+const stream_1 = __nccwpck_require__(2203);
+const typeGuards_js_1 = __nccwpck_require__(48505);
+function streamAsyncIterator() {
+    return tslib_1.__asyncGenerator(this, arguments, function* streamAsyncIterator_1() {
+        const reader = this.getReader();
+        try {
+            while (true) {
+                const { done, value } = yield tslib_1.__await(reader.read());
+                if (done) {
+                    return yield tslib_1.__await(void 0);
+                }
+                yield yield tslib_1.__await(value);
+            }
+        }
+        finally {
+            reader.releaseLock();
+        }
+    });
+}
+function makeAsyncIterable(webStream) {
+    if (!webStream[Symbol.asyncIterator]) {
+        webStream[Symbol.asyncIterator] = streamAsyncIterator.bind(webStream);
+    }
+    if (!webStream.values) {
+        webStream.values = streamAsyncIterator.bind(webStream);
+    }
+}
+function ensureNodeStream(stream) {
+    if (stream instanceof ReadableStream) {
+        makeAsyncIterable(stream);
+        return stream_1.Readable.fromWeb(stream);
+    }
+    else {
+        return stream;
+    }
+}
+function toStream(source) {
+    if (source instanceof Uint8Array) {
+        return stream_1.Readable.from(Buffer.from(source));
+    }
+    else if ((0, typeGuards_js_1.isBlob)(source)) {
+        return ensureNodeStream(source.stream());
+    }
+    else {
+        return ensureNodeStream(source);
+    }
+}
+/**
+ * Utility function that concatenates a set of binary inputs into one combined output.
+ *
+ * @param sources - array of sources for the concatenation
+ * @returns - in Node, a (() =\> NodeJS.ReadableStream) which, when read, produces a concatenation of all the inputs.
+ *           In browser, returns a `Blob` representing all the concatenated inputs.
+ *
+ * @internal
+ */
+async function concat(sources) {
+    return function () {
+        const streams = sources.map((x) => (typeof x === "function" ? x() : x)).map(toStream);
+        return stream_1.Readable.from((function () {
+            return tslib_1.__asyncGenerator(this, arguments, function* () {
+                var _a, e_1, _b, _c;
+                for (const stream of streams) {
+                    try {
+                        for (var _d = true, stream_2 = (e_1 = void 0, tslib_1.__asyncValues(stream)), stream_2_1; stream_2_1 = yield tslib_1.__await(stream_2.next()), _a = stream_2_1.done, !_a; _d = true) {
+                            _c = stream_2_1.value;
+                            _d = false;
+                            const chunk = _c;
+                            yield yield tslib_1.__await(chunk);
+                        }
+                    }
+                    catch (e_1_1) { e_1 = { error: e_1_1 }; }
+                    finally {
+                        try {
+                            if (!_d && !_a && (_b = stream_2.return)) yield tslib_1.__await(_b.call(stream_2));
+                        }
+                        finally { if (e_1) throw e_1.error; }
+                    }
+                }
+            });
+        })());
+    };
+}
+//# sourceMappingURL=concat.js.map
+
+/***/ }),
+
+/***/ 66776:
+/***/ ((__unused_webpack_module, exports, __nccwpck_require__) => {
+
+"use strict";
+
+// Copyright (c) Microsoft Corporation.
+// Licensed under the MIT License.
+Object.defineProperty(exports, "__esModule", ({ value: true }));
+exports.calculateRetryDelay = calculateRetryDelay;
+const random_js_1 = __nccwpck_require__(78640);
+/**
+ * Calculates the delay interval for retry attempts using exponential delay with jitter.
+ * @param retryAttempt - The current retry attempt number.
+ * @param config - The exponential retry configuration.
+ * @returns An object containing the calculated retry delay.
+ */
+function calculateRetryDelay(retryAttempt, config) {
+    // Exponentially increase the delay each time
+    const exponentialDelay = config.retryDelayInMs * Math.pow(2, retryAttempt);
+    // Don't let the delay exceed the maximum
+    const clampedDelay = Math.min(config.maxRetryDelayInMs, exponentialDelay);
+    // Allow the final value to have some "jitter" (within 50% of the delay size) so
+    // that retries across multiple clients don't occur simultaneously.
+    const retryAfterInMs = clampedDelay / 2 + (0, random_js_1.getRandomIntegerInclusive)(0, clampedDelay / 2);
+    return { retryAfterInMs };
+}
+//# sourceMappingURL=delay.js.map
+
+/***/ }),
+
+/***/ 52573:
+/***/ ((__unused_webpack_module, exports, __nccwpck_require__) => {
+
+"use strict";
+
+// Copyright (c) Microsoft Corporation.
+// Licensed under the MIT License.
+Object.defineProperty(exports, "__esModule", ({ value: true }));
+exports.isError = isError;
+const object_js_1 = __nccwpck_require__(53632);
+/**
+ * Typeguard for an error object shape (has name and message)
+ * @param e - Something caught by a catch clause.
+ */
+function isError(e) {
+    if ((0, object_js_1.isObject)(e)) {
+        const hasName = typeof e.name === "string";
+        const hasMessage = typeof e.message === "string";
+        return hasName && hasMessage;
+    }
+    return false;
+}
+//# sourceMappingURL=error.js.map
+
+/***/ }),
+
+/***/ 77566:
+/***/ ((__unused_webpack_module, exports, __nccwpck_require__) => {
+
+"use strict";
+
+// Copyright (c) Microsoft Corporation.
+// Licensed under the MIT License.
+Object.defineProperty(exports, "__esModule", ({ value: true }));
+exports.delay = delay;
+exports.parseHeaderValueAsNumber = parseHeaderValueAsNumber;
+const AbortError_js_1 = __nccwpck_require__(99992);
+const StandardAbortMessage = "The operation was aborted.";
+/**
+ * A wrapper for setTimeout that resolves a promise after delayInMs milliseconds.
+ * @param delayInMs - The number of milliseconds to be delayed.
+ * @param value - The value to be resolved with after a timeout of t milliseconds.
+ * @param options - The options for delay - currently abort options
+ *                  - abortSignal - The abortSignal associated with containing operation.
+ *                  - abortErrorMsg - The abort error message associated with containing operation.
+ * @returns Resolved promise
+ */
+function delay(delayInMs, value, options) {
+    return new Promise((resolve, reject) => {
+        let timer = undefined;
+        let onAborted = undefined;
+        const rejectOnAbort = () => {
+            return reject(new AbortError_js_1.AbortError((options === null || options === void 0 ? void 0 : options.abortErrorMsg) ? options === null || options === void 0 ? void 0 : options.abortErrorMsg : StandardAbortMessage));
+        };
+        const removeListeners = () => {
+            if ((options === null || options === void 0 ? void 0 : options.abortSignal) && onAborted) {
+                options.abortSignal.removeEventListener("abort", onAborted);
+            }
+        };
+        onAborted = () => {
+            if (timer) {
+                clearTimeout(timer);
+            }
+            removeListeners();
+            return rejectOnAbort();
+        };
+        if ((options === null || options === void 0 ? void 0 : options.abortSignal) && options.abortSignal.aborted) {
+            return rejectOnAbort();
+        }
+        timer = setTimeout(() => {
+            removeListeners();
+            resolve(value);
+        }, delayInMs);
+        if (options === null || options === void 0 ? void 0 : options.abortSignal) {
+            options.abortSignal.addEventListener("abort", onAborted);
+        }
+    });
+}
+/**
+ * @internal
+ * @returns the parsed value or undefined if the parsed value is invalid.
+ */
+function parseHeaderValueAsNumber(response, headerName) {
+    const value = response.headers.get(headerName);
+    if (!value)
+        return;
+    const valueAsNum = Number(value);
+    if (Number.isNaN(valueAsNum))
+        return;
+    return valueAsNum;
+}
+//# sourceMappingURL=helpers.js.map
+
+/***/ }),
+
+/***/ 37639:
+/***/ ((__unused_webpack_module, exports, __nccwpck_require__) => {
+
+"use strict";
+
+// Copyright (c) Microsoft Corporation.
+// Licensed under the MIT License.
+Object.defineProperty(exports, "__esModule", ({ value: true }));
+exports.custom = void 0;
+const node_util_1 = __nccwpck_require__(57975);
+exports.custom = node_util_1.inspect.custom;
+//# sourceMappingURL=inspect.js.map
+
+/***/ }),
+
+/***/ 95750:
+/***/ ((__unused_webpack_module, exports, __nccwpck_require__) => {
+
+"use strict";
+
+// Copyright (c) Microsoft Corporation.
+// Licensed under the MIT License.
+Object.defineProperty(exports, "__esModule", ({ value: true }));
+exports.Sanitizer = exports.uint8ArrayToString = exports.stringToUint8Array = exports.isWebWorker = exports.isReactNative = exports.isDeno = exports.isNodeRuntime = exports.isNodeLike = exports.isBun = exports.isBrowser = exports.randomUUID = exports.computeSha256Hmac = exports.computeSha256Hash = exports.isError = exports.isObject = exports.getRandomIntegerInclusive = exports.calculateRetryDelay = void 0;
+var delay_js_1 = __nccwpck_require__(66776);
+Object.defineProperty(exports, "calculateRetryDelay", ({ enumerable: true, get: function () { return delay_js_1.calculateRetryDelay; } }));
+var random_js_1 = __nccwpck_require__(78640);
+Object.defineProperty(exports, "getRandomIntegerInclusive", ({ enumerable: true, get: function () { return random_js_1.getRandomIntegerInclusive; } }));
+var object_js_1 = __nccwpck_require__(53632);
+Object.defineProperty(exports, "isObject", ({ enumerable: true, get: function () { return object_js_1.isObject; } }));
+var error_js_1 = __nccwpck_require__(52573);
+Object.defineProperty(exports, "isError", ({ enumerable: true, get: function () { return error_js_1.isError; } }));
+var sha256_js_1 = __nccwpck_require__(2016);
+Object.defineProperty(exports, "computeSha256Hash", ({ enumerable: true, get: function () { return sha256_js_1.computeSha256Hash; } }));
+Object.defineProperty(exports, "computeSha256Hmac", ({ enumerable: true, get: function () { return sha256_js_1.computeSha256Hmac; } }));
+var uuidUtils_js_1 = __nccwpck_require__(5023);
+Object.defineProperty(exports, "randomUUID", ({ enumerable: true, get: function () { return uuidUtils_js_1.randomUUID; } }));
+var checkEnvironment_js_1 = __nccwpck_require__(85086);
+Object.defineProperty(exports, "isBrowser", ({ enumerable: true, get: function () { return checkEnvironment_js_1.isBrowser; } }));
+Object.defineProperty(exports, "isBun", ({ enumerable: true, get: function () { return checkEnvironment_js_1.isBun; } }));
+Object.defineProperty(exports, "isNodeLike", ({ enumerable: true, get: function () { return checkEnvironment_js_1.isNodeLike; } }));
+Object.defineProperty(exports, "isNodeRuntime", ({ enumerable: true, get: function () { return checkEnvironment_js_1.isNodeRuntime; } }));
+Object.defineProperty(exports, "isDeno", ({ enumerable: true, get: function () { return checkEnvironment_js_1.isDeno; } }));
+Object.defineProperty(exports, "isReactNative", ({ enumerable: true, get: function () { return checkEnvironment_js_1.isReactNative; } }));
+Object.defineProperty(exports, "isWebWorker", ({ enumerable: true, get: function () { return checkEnvironment_js_1.isWebWorker; } }));
+var bytesEncoding_js_1 = __nccwpck_require__(82921);
+Object.defineProperty(exports, "stringToUint8Array", ({ enumerable: true, get: function () { return bytesEncoding_js_1.stringToUint8Array; } }));
+Object.defineProperty(exports, "uint8ArrayToString", ({ enumerable: true, get: function () { return bytesEncoding_js_1.uint8ArrayToString; } }));
+var sanitizer_js_1 = __nccwpck_require__(7784);
+Object.defineProperty(exports, "Sanitizer", ({ enumerable: true, get: function () { return sanitizer_js_1.Sanitizer; } }));
+//# sourceMappingURL=internal.js.map
+
+/***/ }),
+
+/***/ 53632:
+/***/ ((__unused_webpack_module, exports) => {
+
+"use strict";
+
+// Copyright (c) Microsoft Corporation.
+// Licensed under the MIT License.
+Object.defineProperty(exports, "__esModule", ({ value: true }));
+exports.isObject = isObject;
+/**
+ * Helper to determine when an input is a generic JS object.
+ * @returns true when input is an object type that is not null, Array, RegExp, or Date.
+ */
+function isObject(input) {
+    return (typeof input === "object" &&
+        input !== null &&
+        !Array.isArray(input) &&
+        !(input instanceof RegExp) &&
+        !(input instanceof Date));
+}
+//# sourceMappingURL=object.js.map
+
+/***/ }),
+
+/***/ 78640:
+/***/ ((__unused_webpack_module, exports) => {
+
+"use strict";
+
+// Copyright (c) Microsoft Corporation.
+// Licensed under the MIT License.
+Object.defineProperty(exports, "__esModule", ({ value: true }));
+exports.getRandomIntegerInclusive = getRandomIntegerInclusive;
+/**
+ * Returns a random integer value between a lower and upper bound,
+ * inclusive of both bounds.
+ * Note that this uses Math.random and isn't secure. If you need to use
+ * this for any kind of security purpose, find a better source of random.
+ * @param min - The smallest integer value allowed.
+ * @param max - The largest integer value allowed.
+ */
+function getRandomIntegerInclusive(min, max) {
+    // Make sure inputs are integers.
+    min = Math.ceil(min);
+    max = Math.floor(max);
+    // Pick a random offset from zero to the size of the range.
+    // Since Math.random() can never return 1, we have to make the range one larger
+    // in order to be inclusive of the maximum value after we take the floor.
+    const offset = Math.floor(Math.random() * (max - min + 1));
+    return offset + min;
+}
+//# sourceMappingURL=random.js.map
+
+/***/ }),
+
+/***/ 7784:
+/***/ ((__unused_webpack_module, exports, __nccwpck_require__) => {
+
+"use strict";
+
+// Copyright (c) Microsoft Corporation.
+// Licensed under the MIT License.
+Object.defineProperty(exports, "__esModule", ({ value: true }));
+exports.Sanitizer = void 0;
+const object_js_1 = __nccwpck_require__(53632);
+const RedactedString = "REDACTED";
+// Make sure this list is up-to-date with the one under core/logger/Readme#Keyconcepts
+const defaultAllowedHeaderNames = [
+    "x-ms-client-request-id",
+    "x-ms-return-client-request-id",
+    "x-ms-useragent",
+    "x-ms-correlation-request-id",
+    "x-ms-request-id",
+    "client-request-id",
+    "ms-cv",
+    "return-client-request-id",
+    "traceparent",
+    "Access-Control-Allow-Credentials",
+    "Access-Control-Allow-Headers",
+    "Access-Control-Allow-Methods",
+    "Access-Control-Allow-Origin",
+    "Access-Control-Expose-Headers",
+    "Access-Control-Max-Age",
+    "Access-Control-Request-Headers",
+    "Access-Control-Request-Method",
+    "Origin",
+    "Accept",
+    "Accept-Encoding",
+    "Cache-Control",
+    "Connection",
+    "Content-Length",
+    "Content-Type",
+    "Date",
+    "ETag",
+    "Expires",
+    "If-Match",
+    "If-Modified-Since",
+    "If-None-Match",
+    "If-Unmodified-Since",
+    "Last-Modified",
+    "Pragma",
+    "Request-Id",
+    "Retry-After",
+    "Server",
+    "Transfer-Encoding",
+    "User-Agent",
+    "WWW-Authenticate",
+];
+const defaultAllowedQueryParameters = ["api-version"];
+/**
+ * A utility class to sanitize objects for logging.
+ */
+class Sanitizer {
+    constructor({ additionalAllowedHeaderNames: allowedHeaderNames = [], additionalAllowedQueryParameters: allowedQueryParameters = [], } = {}) {
+        allowedHeaderNames = defaultAllowedHeaderNames.concat(allowedHeaderNames);
+        allowedQueryParameters = defaultAllowedQueryParameters.concat(allowedQueryParameters);
+        this.allowedHeaderNames = new Set(allowedHeaderNames.map((n) => n.toLowerCase()));
+        this.allowedQueryParameters = new Set(allowedQueryParameters.map((p) => p.toLowerCase()));
+    }
+    /**
+     * Sanitizes an object for logging.
+     * @param obj - The object to sanitize
+     * @returns - The sanitized object as a string
+     */
+    sanitize(obj) {
+        const seen = new Set();
+        return JSON.stringify(obj, (key, value) => {
+            // Ensure Errors include their interesting non-enumerable members
+            if (value instanceof Error) {
+                return Object.assign(Object.assign({}, value), { name: value.name, message: value.message });
+            }
+            if (key === "headers") {
+                return this.sanitizeHeaders(value);
+            }
+            else if (key === "url") {
+                return this.sanitizeUrl(value);
+            }
+            else if (key === "query") {
+                return this.sanitizeQuery(value);
+            }
+            else if (key === "body") {
+                // Don't log the request body
+                return undefined;
+            }
+            else if (key === "response") {
+                // Don't log response again
+                return undefined;
+            }
+            else if (key === "operationSpec") {
+                // When using sendOperationRequest, the request carries a massive
+                // field with the autorest spec. No need to log it.
+                return undefined;
+            }
+            else if (Array.isArray(value) || (0, object_js_1.isObject)(value)) {
+                if (seen.has(value)) {
+                    return "[Circular]";
+                }
+                seen.add(value);
+            }
+            return value;
+        }, 2);
+    }
+    /**
+     * Sanitizes a URL for logging.
+     * @param value - The URL to sanitize
+     * @returns - The sanitized URL as a string
+     */
+    sanitizeUrl(value) {
+        if (typeof value !== "string" || value === null || value === "") {
+            return value;
+        }
+        const url = new URL(value);
+        if (!url.search) {
+            return value;
+        }
+        for (const [key] of url.searchParams) {
+            if (!this.allowedQueryParameters.has(key.toLowerCase())) {
+                url.searchParams.set(key, RedactedString);
+            }
+        }
+        return url.toString();
+    }
+    sanitizeHeaders(obj) {
+        const sanitized = {};
+        for (const key of Object.keys(obj)) {
+            if (this.allowedHeaderNames.has(key.toLowerCase())) {
+                sanitized[key] = obj[key];
+            }
+            else {
+                sanitized[key] = RedactedString;
+            }
+        }
+        return sanitized;
+    }
+    sanitizeQuery(value) {
+        if (typeof value !== "object" || value === null) {
+            return value;
+        }
+        const sanitized = {};
+        for (const k of Object.keys(value)) {
+            if (this.allowedQueryParameters.has(k.toLowerCase())) {
+                sanitized[k] = value[k];
+            }
+            else {
+                sanitized[k] = RedactedString;
+            }
+        }
+        return sanitized;
+    }
+}
+exports.Sanitizer = Sanitizer;
+//# sourceMappingURL=sanitizer.js.map
+
+/***/ }),
+
+/***/ 2016:
+/***/ ((__unused_webpack_module, exports, __nccwpck_require__) => {
+
+"use strict";
+
+// Copyright (c) Microsoft Corporation.
+// Licensed under the MIT License.
+Object.defineProperty(exports, "__esModule", ({ value: true }));
+exports.computeSha256Hmac = computeSha256Hmac;
+exports.computeSha256Hash = computeSha256Hash;
+const node_crypto_1 = __nccwpck_require__(77598);
+/**
+ * Generates a SHA-256 HMAC signature.
+ * @param key - The HMAC key represented as a base64 string, used to generate the cryptographic HMAC hash.
+ * @param stringToSign - The data to be signed.
+ * @param encoding - The textual encoding to use for the returned HMAC digest.
+ */
+async function computeSha256Hmac(key, stringToSign, encoding) {
+    const decodedKey = Buffer.from(key, "base64");
+    return (0, node_crypto_1.createHmac)("sha256", decodedKey).update(stringToSign).digest(encoding);
+}
+/**
+ * Generates a SHA-256 hash.
+ * @param content - The data to be included in the hash.
+ * @param encoding - The textual encoding to use for the returned hash.
+ */
+async function computeSha256Hash(content, encoding) {
+    return (0, node_crypto_1.createHash)("sha256").update(content).digest(encoding);
+}
+//# sourceMappingURL=sha256.js.map
+
+/***/ }),
+
+/***/ 48505:
+/***/ ((__unused_webpack_module, exports) => {
+
+"use strict";
+
+// Copyright (c) Microsoft Corporation.
+// Licensed under the MIT License.
+Object.defineProperty(exports, "__esModule", ({ value: true }));
+exports.isNodeReadableStream = isNodeReadableStream;
+exports.isWebReadableStream = isWebReadableStream;
+exports.isBinaryBody = isBinaryBody;
+exports.isReadableStream = isReadableStream;
+exports.isBlob = isBlob;
+function isNodeReadableStream(x) {
+    return Boolean(x && typeof x["pipe"] === "function");
+}
+function isWebReadableStream(x) {
+    return Boolean(x &&
+        typeof x.getReader === "function" &&
+        typeof x.tee === "function");
+}
+function isBinaryBody(body) {
+    return (body !== undefined &&
+        (body instanceof Uint8Array ||
+            isReadableStream(body) ||
+            typeof body === "function" ||
+            body instanceof Blob));
+}
+function isReadableStream(x) {
+    return isNodeReadableStream(x) || isWebReadableStream(x);
+}
+function isBlob(x) {
+    return typeof x.stream === "function";
+}
+//# sourceMappingURL=typeGuards.js.map
+
+/***/ }),
+
+/***/ 62731:
+/***/ ((__unused_webpack_module, exports, __nccwpck_require__) => {
+
+"use strict";
+
+// Copyright (c) Microsoft Corporation.
+// Licensed under the MIT License.
+Object.defineProperty(exports, "__esModule", ({ value: true }));
+exports.getUserAgentHeaderName = getUserAgentHeaderName;
+exports.getUserAgentValue = getUserAgentValue;
+const userAgentPlatform_js_1 = __nccwpck_require__(83196);
+const constants_js_1 = __nccwpck_require__(31255);
+function getUserAgentString(telemetryInfo) {
+    const parts = [];
+    for (const [key, value] of telemetryInfo) {
+        const token = value ? `${key}/${value}` : key;
+        parts.push(token);
+    }
+    return parts.join(" ");
+}
+/**
+ * @internal
+ */
+function getUserAgentHeaderName() {
+    return (0, userAgentPlatform_js_1.getHeaderName)();
+}
+/**
+ * @internal
+ */
+async function getUserAgentValue(prefix) {
+    const runtimeInfo = new Map();
+    runtimeInfo.set("ts-http-runtime", constants_js_1.SDK_VERSION);
+    await (0, userAgentPlatform_js_1.setPlatformSpecificData)(runtimeInfo);
+    const defaultAgent = getUserAgentString(runtimeInfo);
+    const userAgentValue = prefix ? `${prefix} ${defaultAgent}` : defaultAgent;
+    return userAgentValue;
+}
+//# sourceMappingURL=userAgent.js.map
+
+/***/ }),
+
+/***/ 83196:
+/***/ ((__unused_webpack_module, exports, __nccwpck_require__) => {
+
+"use strict";
+
+// Copyright (c) Microsoft Corporation.
+// Licensed under the MIT License.
+Object.defineProperty(exports, "__esModule", ({ value: true }));
+exports.getHeaderName = getHeaderName;
+exports.setPlatformSpecificData = setPlatformSpecificData;
+const tslib_1 = __nccwpck_require__(61860);
+const os = tslib_1.__importStar(__nccwpck_require__(48161));
+const process = tslib_1.__importStar(__nccwpck_require__(1708));
+/**
+ * @internal
+ */
+function getHeaderName() {
+    return "User-Agent";
+}
+/**
+ * @internal
+ */
+async function setPlatformSpecificData(map) {
+    if (process && process.versions) {
+        const versions = process.versions;
+        if (versions.bun) {
+            map.set("Bun", versions.bun);
+        }
+        else if (versions.deno) {
+            map.set("Deno", versions.deno);
+        }
+        else if (versions.node) {
+            map.set("Node", versions.node);
+        }
+    }
+    map.set("OS", `(${os.arch()}-${os.type()}-${os.release()})`);
+}
+//# sourceMappingURL=userAgentPlatform.js.map
+
+/***/ }),
+
+/***/ 5023:
+/***/ ((__unused_webpack_module, exports, __nccwpck_require__) => {
+
+"use strict";
+
+// Copyright (c) Microsoft Corporation.
+// Licensed under the MIT License.
+var _a;
+Object.defineProperty(exports, "__esModule", ({ value: true }));
+exports.randomUUID = randomUUID;
+const node_crypto_1 = __nccwpck_require__(77598);
+// NOTE: This is a workaround until we can use `globalThis.crypto.randomUUID` in Node.js 19+.
+const uuidFunction = typeof ((_a = globalThis === null || globalThis === void 0 ? void 0 : globalThis.crypto) === null || _a === void 0 ? void 0 : _a.randomUUID) === "function"
+    ? globalThis.crypto.randomUUID.bind(globalThis.crypto)
+    : node_crypto_1.randomUUID;
+/**
+ * Generated Universally Unique Identifier
+ *
+ * @returns RFC4122 v4 UUID.
+ */
+function randomUUID() {
+    return uuidFunction();
+}
+//# sourceMappingURL=uuidUtils.js.map
+
+/***/ }),
+
+/***/ 67816:
+/***/ ((__unused_webpack_module, exports, __nccwpck_require__) => {
+
+"use strict";
+
+
+const vendors = __nccwpck_require__(22040)
+
+const env = process.env
+
+// Used for testing only
+Object.defineProperty(exports, "_vendors", ({
+  value: vendors.map(function (v) {
+    return v.constant
+  })
+}))
+
+exports.name = null
+exports.isPR = null
+exports.id = null
+
+vendors.forEach(function (vendor) {
+  const envs = Array.isArray(vendor.env) ? vendor.env : [vendor.env]
+  const isCI = envs.every(function (obj) {
+    return checkEnv(obj)
+  })
+
+  exports[vendor.constant] = isCI
+
+  if (!isCI) {
+    return
+  }
+
+  exports.name = vendor.name
+  exports.isPR = checkPR(vendor)
+  exports.id = vendor.constant
+})
+
+exports.isCI = !!(
+  env.CI !== 'false' && // Bypass all checks if CI env is explicitly set to 'false'
+  (env.BUILD_ID || // Jenkins, Cloudbees
+    env.BUILD_NUMBER || // Jenkins, TeamCity
+    env.CI || // Travis CI, CircleCI, Cirrus CI, Gitlab CI, Appveyor, CodeShip, dsari, Cloudflare Pages/Workers
+    env.CI_APP_ID || // Appflow
+    env.CI_BUILD_ID || // Appflow
+    env.CI_BUILD_NUMBER || // Appflow
+    env.CI_NAME || // Codeship and others
+    env.CONTINUOUS_INTEGRATION || // Travis CI, Cirrus CI
+    env.RUN_ID || // TaskCluster, dsari
+    exports.name ||
+    false)
+)
+
+function checkEnv (obj) {
+  // "env": "CIRRUS"
+  if (typeof obj === 'string') return !!env[obj]
+
+  // "env": { "env": "NODE", "includes": "/app/.heroku/node/bin/node" }
+  if ('env' in obj) {
+    // Currently there are no other types, uncomment when there are
+    // if ('includes' in obj) {
+    return env[obj.env] && env[obj.env].includes(obj.includes)
+    // }
+  }
+
+  if ('any' in obj) {
+    return obj.any.some(function (k) {
+      return !!env[k]
+    })
+  }
+
+  return Object.keys(obj).every(function (k) {
+    return env[k] === obj[k]
+  })
+}
+
+function checkPR (vendor) {
+  switch (typeof vendor.pr) {
+    case 'string':
+      // "pr": "CIRRUS_PR"
+      return !!env[vendor.pr]
+    case 'object':
+      if ('env' in vendor.pr) {
+        if ('any' in vendor.pr) {
+          // "pr": { "env": "CODEBUILD_WEBHOOK_EVENT", "any": ["PULL_REQUEST_CREATED", "PULL_REQUEST_UPDATED"] }
+          return vendor.pr.any.some(function (key) {
+            return env[vendor.pr.env] === key
+          })
+        } else {
+          // "pr": { "env": "BUILDKITE_PULL_REQUEST", "ne": "false" }
+          return vendor.pr.env in env && env[vendor.pr.env] !== vendor.pr.ne
+        }
+      } else if ('any' in vendor.pr) {
+        // "pr": { "any": ["ghprbPullId", "CHANGE_ID"] }
+        return vendor.pr.any.some(function (key) {
+          return !!env[key]
+        })
+      } else {
+        // "pr": { "DRONE_BUILD_EVENT": "pull_request" }
+        return checkEnv(vendor.pr)
+      }
+    default:
+      // PR detection not supported for this vendor
+      return null
+  }
+}
+
+
+/***/ }),
+
 /***/ 24352:
 /***/ ((module, __unused_webpack_exports, __nccwpck_require__) => {
 
 "use strict";
 
 
-const { normalizeIPv6, normalizeIPv4, removeDotSegments, recomposeAuthority, normalizeComponentEncoding } = __nccwpck_require__(15077)
-const SCHEMES = __nccwpck_require__(75300)
+const { normalizeIPv6, removeDotSegments, recomposeAuthority, normalizeComponentEncoding, isIPv4, nonSimpleDomain } = __nccwpck_require__(15077)
+const { SCHEMES, getSchemeHandler } = __nccwpck_require__(75300)
 
+/**
+ * @template {import('./types/index').URIComponent|string} T
+ * @param {T} uri
+ * @param {import('./types/index').Options} [options]
+ * @returns {T}
+ */
 function normalize (uri, options) {
   if (typeof uri === 'string') {
-    uri = serialize(parse(uri, options), options)
+    uri = /** @type {T} */ (serialize(parse(uri, options), options))
   } else if (typeof uri === 'object') {
-    uri = parse(serialize(uri, options), options)
+    uri = /** @type {T} */ (parse(serialize(uri, options), options))
   }
   return uri
 }
 
+/**
+ * @param {string} baseURI
+ * @param {string} relativeURI
+ * @param {import('./types/index').Options} [options]
+ * @returns {string}
+ */
 function resolve (baseURI, relativeURI, options) {
-  const schemelessOptions = Object.assign({ scheme: 'null' }, options)
-  const resolved = resolveComponents(parse(baseURI, schemelessOptions), parse(relativeURI, schemelessOptions), schemelessOptions, true)
-  return serialize(resolved, { ...schemelessOptions, skipEscape: true })
+  const schemelessOptions = options ? Object.assign({ scheme: 'null' }, options) : { scheme: 'null' }
+  const resolved = resolveComponent(parse(baseURI, schemelessOptions), parse(relativeURI, schemelessOptions), schemelessOptions, true)
+  schemelessOptions.skipEscape = true
+  return serialize(resolved, schemelessOptions)
 }
 
-function resolveComponents (base, relative, options, skipNormalization) {
+/**
+ * @param {import ('./types/index').URIComponent} base
+ * @param {import ('./types/index').URIComponent} relative
+ * @param {import('./types/index').Options} [options]
+ * @param {boolean} [skipNormalization=false]
+ * @returns {import ('./types/index').URIComponent}
+ */
+function resolveComponent (base, relative, options, skipNormalization) {
+  /** @type {import('./types/index').URIComponent} */
   const target = {}
   if (!skipNormalization) {
-    base = parse(serialize(base, options), options) // normalize base components
-    relative = parse(serialize(relative, options), options) // normalize relative components
+    base = parse(serialize(base, options), options) // normalize base component
+    relative = parse(serialize(relative, options), options) // normalize relative component
   }
   options = options || {}
 
@@ -114113,7 +117781,7 @@ function resolveComponents (base, relative, options, skipNormalization) {
           target.query = base.query
         }
       } else {
-        if (relative.path.charAt(0) === '/') {
+        if (relative.path[0] === '/') {
           target.path = removeDotSegments(relative.path)
         } else {
           if ((base.userinfo !== undefined || base.host !== undefined || base.port !== undefined) && !base.path) {
@@ -114140,6 +117808,12 @@ function resolveComponents (base, relative, options, skipNormalization) {
   return target
 }
 
+/**
+ * @param {import ('./types/index').URIComponent|string} uriA
+ * @param {import ('./types/index').URIComponent|string} uriB
+ * @param {import ('./types/index').Options} options
+ * @returns {boolean}
+ */
 function equal (uriA, uriB, options) {
   if (typeof uriA === 'string') {
     uriA = unescape(uriA)
@@ -114158,8 +117832,13 @@ function equal (uriA, uriB, options) {
   return uriA.toLowerCase() === uriB.toLowerCase()
 }
 
+/**
+ * @param {Readonly<import('./types/index').URIComponent>} cmpts
+ * @param {import('./types/index').Options} [opts]
+ * @returns {string}
+ */
 function serialize (cmpts, opts) {
-  const components = {
+  const component = {
     host: cmpts.host,
     scheme: cmpts.scheme,
     userinfo: cmpts.userinfo,
@@ -114179,28 +117858,28 @@ function serialize (cmpts, opts) {
   const uriTokens = []
 
   // find scheme handler
-  const schemeHandler = SCHEMES[(options.scheme || components.scheme || '').toLowerCase()]
+  const schemeHandler = getSchemeHandler(options.scheme || component.scheme)
 
   // perform scheme specific serialization
-  if (schemeHandler && schemeHandler.serialize) schemeHandler.serialize(components, options)
+  if (schemeHandler && schemeHandler.serialize) schemeHandler.serialize(component, options)
 
-  if (components.path !== undefined) {
+  if (component.path !== undefined) {
     if (!options.skipEscape) {
-      components.path = escape(components.path)
+      component.path = escape(component.path)
 
-      if (components.scheme !== undefined) {
-        components.path = components.path.split('%3A').join(':')
+      if (component.scheme !== undefined) {
+        component.path = component.path.split('%3A').join(':')
       }
     } else {
-      components.path = unescape(components.path)
+      component.path = unescape(component.path)
     }
   }
 
-  if (options.reference !== 'suffix' && components.scheme) {
-    uriTokens.push(components.scheme, ':')
+  if (options.reference !== 'suffix' && component.scheme) {
+    uriTokens.push(component.scheme, ':')
   }
 
-  const authority = recomposeAuthority(components)
+  const authority = recomposeAuthority(component)
   if (authority !== undefined) {
     if (options.reference !== 'suffix') {
       uriTokens.push('//')
@@ -114208,51 +117887,49 @@ function serialize (cmpts, opts) {
 
     uriTokens.push(authority)
 
-    if (components.path && components.path.charAt(0) !== '/') {
+    if (component.path && component.path[0] !== '/') {
       uriTokens.push('/')
     }
   }
-  if (components.path !== undefined) {
-    let s = components.path
+  if (component.path !== undefined) {
+    let s = component.path
 
     if (!options.absolutePath && (!schemeHandler || !schemeHandler.absolutePath)) {
       s = removeDotSegments(s)
     }
 
-    if (authority === undefined) {
-      s = s.replace(/^\/\//u, '/%2F') // don't allow the path to start with "//"
+    if (
+      authority === undefined &&
+      s[0] === '/' &&
+      s[1] === '/'
+    ) {
+      // don't allow the path to start with "//"
+      s = '/%2F' + s.slice(2)
     }
 
     uriTokens.push(s)
   }
 
-  if (components.query !== undefined) {
-    uriTokens.push('?', components.query)
+  if (component.query !== undefined) {
+    uriTokens.push('?', component.query)
   }
 
-  if (components.fragment !== undefined) {
-    uriTokens.push('#', components.fragment)
+  if (component.fragment !== undefined) {
+    uriTokens.push('#', component.fragment)
   }
   return uriTokens.join('')
 }
 
-const hexLookUp = Array.from({ length: 127 }, (_v, k) => /[^!"$&'()*+,\-.;=_`a-z{}~]/u.test(String.fromCharCode(k)))
-
-function nonSimpleDomain (value) {
-  let code = 0
-  for (let i = 0, len = value.length; i < len; ++i) {
-    code = value.charCodeAt(i)
-    if (code > 126 || hexLookUp[code]) {
-      return true
-    }
-  }
-  return false
-}
-
 const URI_PARSE = /^(?:([^#/:?]+):)?(?:\/\/((?:([^#/?@]*)@)?(\[[^#/?\]]+\]|[^#/:?]*)(?::(\d*))?))?([^#?]*)(?:\?([^#]*))?(?:#((?:.|[\n\r])*))?/u
 
+/**
+ * @param {string} uri
+ * @param {import('./types/index').Options} [opts]
+ * @returns
+ */
 function parse (uri, opts) {
   const options = Object.assign({}, opts)
+  /** @type {import('./types/index').URIComponent} */
   const parsed = {
     scheme: undefined,
     userinfo: undefined,
@@ -114262,9 +117939,15 @@ function parse (uri, opts) {
     query: undefined,
     fragment: undefined
   }
-  const gotEncoding = uri.indexOf('%') !== -1
+
   let isIP = false
-  if (options.reference === 'suffix') uri = (options.scheme ? options.scheme + ':' : '') + '//' + uri
+  if (options.reference === 'suffix') {
+    if (options.scheme) {
+      uri = options.scheme + ':' + uri
+    } else {
+      uri = '//' + uri
+    }
+  }
 
   const matches = uri.match(URI_PARSE)
 
@@ -114283,13 +117966,12 @@ function parse (uri, opts) {
       parsed.port = matches[5]
     }
     if (parsed.host) {
-      const ipv4result = normalizeIPv4(parsed.host)
-      if (ipv4result.isIPV4 === false) {
-        const ipv6result = normalizeIPv6(ipv4result.host)
+      const ipv4result = isIPv4(parsed.host)
+      if (ipv4result === false) {
+        const ipv6result = normalizeIPv6(parsed.host)
         parsed.host = ipv6result.host.toLowerCase()
         isIP = ipv6result.isIPV6
       } else {
-        parsed.host = ipv4result.host
         isIP = true
       }
     }
@@ -114309,7 +117991,7 @@ function parse (uri, opts) {
     }
 
     // find scheme handler
-    const schemeHandler = SCHEMES[(options.scheme || parsed.scheme || '').toLowerCase()]
+    const schemeHandler = getSchemeHandler(options.scheme || parsed.scheme)
 
     // check if scheme can't handle IRIs
     if (!options.unicodeSupport && (!schemeHandler || !schemeHandler.unicodeSupport)) {
@@ -114326,11 +118008,13 @@ function parse (uri, opts) {
     }
 
     if (!schemeHandler || (schemeHandler && !schemeHandler.skipNormalize)) {
-      if (gotEncoding && parsed.scheme !== undefined) {
-        parsed.scheme = unescape(parsed.scheme)
-      }
-      if (gotEncoding && parsed.host !== undefined) {
-        parsed.host = unescape(parsed.host)
+      if (uri.indexOf('%') !== -1) {
+        if (parsed.scheme !== undefined) {
+          parsed.scheme = unescape(parsed.scheme)
+        }
+        if (parsed.host !== undefined) {
+          parsed.host = unescape(parsed.host)
+        }
       }
       if (parsed.path) {
         parsed.path = escape(unescape(parsed.path))
@@ -114354,7 +118038,7 @@ const fastUri = {
   SCHEMES,
   normalize,
   resolve,
-  resolveComponents,
+  resolveComponent,
   equal,
   serialize,
   parse
@@ -114368,301 +118052,380 @@ module.exports.fastUri = fastUri
 /***/ }),
 
 /***/ 75300:
-/***/ ((module) => {
+/***/ ((module, __unused_webpack_exports, __nccwpck_require__) => {
 
 "use strict";
 
 
-const UUID_REG = /^[\da-f]{8}-[\da-f]{4}-[\da-f]{4}-[\da-f]{4}-[\da-f]{12}$/iu
+const { isUUID } = __nccwpck_require__(15077)
 const URN_REG = /([\da-z][\d\-a-z]{0,31}):((?:[\w!$'()*+,\-.:;=@]|%[\da-f]{2})+)/iu
 
-function isSecure (wsComponents) {
-  return typeof wsComponents.secure === 'boolean' ? wsComponents.secure : String(wsComponents.scheme).toLowerCase() === 'wss'
+const supportedSchemeNames = /** @type {const} */ (['http', 'https', 'ws',
+  'wss', 'urn', 'urn:uuid'])
+
+/** @typedef {supportedSchemeNames[number]} SchemeName */
+
+/**
+ * @param {string} name
+ * @returns {name is SchemeName}
+ */
+function isValidSchemeName (name) {
+  return supportedSchemeNames.indexOf(/** @type {*} */ (name)) !== -1
 }
 
-function httpParse (components) {
-  if (!components.host) {
-    components.error = components.error || 'HTTP URIs must have a host.'
+/**
+ * @callback SchemeFn
+ * @param {import('../types/index').URIComponent} component
+ * @param {import('../types/index').Options} options
+ * @returns {import('../types/index').URIComponent}
+ */
+
+/**
+ * @typedef {Object} SchemeHandler
+ * @property {SchemeName} scheme - The scheme name.
+ * @property {boolean} [domainHost] - Indicates if the scheme supports domain hosts.
+ * @property {SchemeFn} parse - Function to parse the URI component for this scheme.
+ * @property {SchemeFn} serialize - Function to serialize the URI component for this scheme.
+ * @property {boolean} [skipNormalize] - Indicates if normalization should be skipped for this scheme.
+ * @property {boolean} [absolutePath] - Indicates if the scheme uses absolute paths.
+ * @property {boolean} [unicodeSupport] - Indicates if the scheme supports Unicode.
+ */
+
+/**
+ * @param {import('../types/index').URIComponent} wsComponent
+ * @returns {boolean}
+ */
+function wsIsSecure (wsComponent) {
+  if (wsComponent.secure === true) {
+    return true
+  } else if (wsComponent.secure === false) {
+    return false
+  } else if (wsComponent.scheme) {
+    return (
+      wsComponent.scheme.length === 3 &&
+      (wsComponent.scheme[0] === 'w' || wsComponent.scheme[0] === 'W') &&
+      (wsComponent.scheme[1] === 's' || wsComponent.scheme[1] === 'S') &&
+      (wsComponent.scheme[2] === 's' || wsComponent.scheme[2] === 'S')
+    )
+  } else {
+    return false
+  }
+}
+
+/** @type {SchemeFn} */
+function httpParse (component) {
+  if (!component.host) {
+    component.error = component.error || 'HTTP URIs must have a host.'
   }
 
-  return components
+  return component
 }
 
-function httpSerialize (components) {
-  const secure = String(components.scheme).toLowerCase() === 'https'
+/** @type {SchemeFn} */
+function httpSerialize (component) {
+  const secure = String(component.scheme).toLowerCase() === 'https'
 
   // normalize the default port
-  if (components.port === (secure ? 443 : 80) || components.port === '') {
-    components.port = undefined
+  if (component.port === (secure ? 443 : 80) || component.port === '') {
+    component.port = undefined
   }
 
   // normalize the empty path
-  if (!components.path) {
-    components.path = '/'
+  if (!component.path) {
+    component.path = '/'
   }
 
   // NOTE: We do not parse query strings for HTTP URIs
   // as WWW Form Url Encoded query strings are part of the HTML4+ spec,
   // and not the HTTP spec.
 
-  return components
+  return component
 }
 
-function wsParse (wsComponents) {
+/** @type {SchemeFn} */
+function wsParse (wsComponent) {
 // indicate if the secure flag is set
-  wsComponents.secure = isSecure(wsComponents)
+  wsComponent.secure = wsIsSecure(wsComponent)
 
   // construct resouce name
-  wsComponents.resourceName = (wsComponents.path || '/') + (wsComponents.query ? '?' + wsComponents.query : '')
-  wsComponents.path = undefined
-  wsComponents.query = undefined
+  wsComponent.resourceName = (wsComponent.path || '/') + (wsComponent.query ? '?' + wsComponent.query : '')
+  wsComponent.path = undefined
+  wsComponent.query = undefined
 
-  return wsComponents
+  return wsComponent
 }
 
-function wsSerialize (wsComponents) {
+/** @type {SchemeFn} */
+function wsSerialize (wsComponent) {
 // normalize the default port
-  if (wsComponents.port === (isSecure(wsComponents) ? 443 : 80) || wsComponents.port === '') {
-    wsComponents.port = undefined
+  if (wsComponent.port === (wsIsSecure(wsComponent) ? 443 : 80) || wsComponent.port === '') {
+    wsComponent.port = undefined
   }
 
   // ensure scheme matches secure flag
-  if (typeof wsComponents.secure === 'boolean') {
-    wsComponents.scheme = (wsComponents.secure ? 'wss' : 'ws')
-    wsComponents.secure = undefined
+  if (typeof wsComponent.secure === 'boolean') {
+    wsComponent.scheme = (wsComponent.secure ? 'wss' : 'ws')
+    wsComponent.secure = undefined
   }
 
   // reconstruct path from resource name
-  if (wsComponents.resourceName) {
-    const [path, query] = wsComponents.resourceName.split('?')
-    wsComponents.path = (path && path !== '/' ? path : undefined)
-    wsComponents.query = query
-    wsComponents.resourceName = undefined
+  if (wsComponent.resourceName) {
+    const [path, query] = wsComponent.resourceName.split('?')
+    wsComponent.path = (path && path !== '/' ? path : undefined)
+    wsComponent.query = query
+    wsComponent.resourceName = undefined
   }
 
   // forbid fragment component
-  wsComponents.fragment = undefined
+  wsComponent.fragment = undefined
 
-  return wsComponents
+  return wsComponent
 }
 
-function urnParse (urnComponents, options) {
-  if (!urnComponents.path) {
-    urnComponents.error = 'URN can not be parsed'
-    return urnComponents
+/** @type {SchemeFn} */
+function urnParse (urnComponent, options) {
+  if (!urnComponent.path) {
+    urnComponent.error = 'URN can not be parsed'
+    return urnComponent
   }
-  const matches = urnComponents.path.match(URN_REG)
+  const matches = urnComponent.path.match(URN_REG)
   if (matches) {
-    const scheme = options.scheme || urnComponents.scheme || 'urn'
-    urnComponents.nid = matches[1].toLowerCase()
-    urnComponents.nss = matches[2]
-    const urnScheme = `${scheme}:${options.nid || urnComponents.nid}`
-    const schemeHandler = SCHEMES[urnScheme]
-    urnComponents.path = undefined
+    const scheme = options.scheme || urnComponent.scheme || 'urn'
+    urnComponent.nid = matches[1].toLowerCase()
+    urnComponent.nss = matches[2]
+    const urnScheme = `${scheme}:${options.nid || urnComponent.nid}`
+    const schemeHandler = getSchemeHandler(urnScheme)
+    urnComponent.path = undefined
 
     if (schemeHandler) {
-      urnComponents = schemeHandler.parse(urnComponents, options)
+      urnComponent = schemeHandler.parse(urnComponent, options)
     }
   } else {
-    urnComponents.error = urnComponents.error || 'URN can not be parsed.'
+    urnComponent.error = urnComponent.error || 'URN can not be parsed.'
   }
 
-  return urnComponents
+  return urnComponent
 }
 
-function urnSerialize (urnComponents, options) {
-  const scheme = options.scheme || urnComponents.scheme || 'urn'
-  const nid = urnComponents.nid.toLowerCase()
+/** @type {SchemeFn} */
+function urnSerialize (urnComponent, options) {
+  if (urnComponent.nid === undefined) {
+    throw new Error('URN without nid cannot be serialized')
+  }
+  const scheme = options.scheme || urnComponent.scheme || 'urn'
+  const nid = urnComponent.nid.toLowerCase()
   const urnScheme = `${scheme}:${options.nid || nid}`
-  const schemeHandler = SCHEMES[urnScheme]
+  const schemeHandler = getSchemeHandler(urnScheme)
 
   if (schemeHandler) {
-    urnComponents = schemeHandler.serialize(urnComponents, options)
+    urnComponent = schemeHandler.serialize(urnComponent, options)
   }
 
-  const uriComponents = urnComponents
-  const nss = urnComponents.nss
-  uriComponents.path = `${nid || options.nid}:${nss}`
+  const uriComponent = urnComponent
+  const nss = urnComponent.nss
+  uriComponent.path = `${nid || options.nid}:${nss}`
 
   options.skipEscape = true
-  return uriComponents
+  return uriComponent
 }
 
-function urnuuidParse (urnComponents, options) {
-  const uuidComponents = urnComponents
-  uuidComponents.uuid = uuidComponents.nss
-  uuidComponents.nss = undefined
+/** @type {SchemeFn} */
+function urnuuidParse (urnComponent, options) {
+  const uuidComponent = urnComponent
+  uuidComponent.uuid = uuidComponent.nss
+  uuidComponent.nss = undefined
 
-  if (!options.tolerant && (!uuidComponents.uuid || !UUID_REG.test(uuidComponents.uuid))) {
-    uuidComponents.error = uuidComponents.error || 'UUID is not valid.'
+  if (!options.tolerant && (!uuidComponent.uuid || !isUUID(uuidComponent.uuid))) {
+    uuidComponent.error = uuidComponent.error || 'UUID is not valid.'
   }
 
-  return uuidComponents
+  return uuidComponent
 }
 
-function urnuuidSerialize (uuidComponents) {
-  const urnComponents = uuidComponents
+/** @type {SchemeFn} */
+function urnuuidSerialize (uuidComponent) {
+  const urnComponent = uuidComponent
   // normalize UUID
-  urnComponents.nss = (uuidComponents.uuid || '').toLowerCase()
-  return urnComponents
+  urnComponent.nss = (uuidComponent.uuid || '').toLowerCase()
+  return urnComponent
 }
 
-const http = {
+const http = /** @type {SchemeHandler} */ ({
   scheme: 'http',
   domainHost: true,
   parse: httpParse,
   serialize: httpSerialize
-}
+})
 
-const https = {
+const https = /** @type {SchemeHandler} */ ({
   scheme: 'https',
   domainHost: http.domainHost,
   parse: httpParse,
   serialize: httpSerialize
-}
+})
 
-const ws = {
+const ws = /** @type {SchemeHandler} */ ({
   scheme: 'ws',
   domainHost: true,
   parse: wsParse,
   serialize: wsSerialize
-}
+})
 
-const wss = {
+const wss = /** @type {SchemeHandler} */ ({
   scheme: 'wss',
   domainHost: ws.domainHost,
   parse: ws.parse,
   serialize: ws.serialize
-}
+})
 
-const urn = {
+const urn = /** @type {SchemeHandler} */ ({
   scheme: 'urn',
   parse: urnParse,
   serialize: urnSerialize,
   skipNormalize: true
-}
+})
 
-const urnuuid = {
+const urnuuid = /** @type {SchemeHandler} */ ({
   scheme: 'urn:uuid',
   parse: urnuuidParse,
   serialize: urnuuidSerialize,
   skipNormalize: true
-}
+})
 
-const SCHEMES = {
+const SCHEMES = /** @type {Record<SchemeName, SchemeHandler>} */ ({
   http,
   https,
   ws,
   wss,
   urn,
   'urn:uuid': urnuuid
-}
+})
 
-module.exports = SCHEMES
+Object.setPrototypeOf(SCHEMES, null)
 
-
-/***/ }),
-
-/***/ 21553:
-/***/ ((module) => {
-
-"use strict";
-
-
-const HEX = {
-  0: 0,
-  1: 1,
-  2: 2,
-  3: 3,
-  4: 4,
-  5: 5,
-  6: 6,
-  7: 7,
-  8: 8,
-  9: 9,
-  a: 10,
-  A: 10,
-  b: 11,
-  B: 11,
-  c: 12,
-  C: 12,
-  d: 13,
-  D: 13,
-  e: 14,
-  E: 14,
-  f: 15,
-  F: 15
+/**
+ * @param {string|undefined} scheme
+ * @returns {SchemeHandler|undefined}
+ */
+function getSchemeHandler (scheme) {
+  return (
+    scheme && (
+      SCHEMES[/** @type {SchemeName} */ (scheme)] ||
+      SCHEMES[/** @type {SchemeName} */(scheme.toLowerCase())])
+  ) ||
+    undefined
 }
 
 module.exports = {
-  HEX
+  wsIsSecure,
+  SCHEMES,
+  isValidSchemeName,
+  getSchemeHandler,
 }
 
 
 /***/ }),
 
 /***/ 15077:
-/***/ ((module, __unused_webpack_exports, __nccwpck_require__) => {
+/***/ ((module) => {
 
 "use strict";
 
 
-const { HEX } = __nccwpck_require__(21553)
+/** @type {(value: string) => boolean} */
+const isUUID = RegExp.prototype.test.bind(/^[\da-f]{8}-[\da-f]{4}-[\da-f]{4}-[\da-f]{4}-[\da-f]{12}$/iu)
 
-const IPV4_REG = /^(?:(?:25[0-5]|2[0-4]\d|1\d{2}|[1-9]\d|\d)\.){3}(?:25[0-5]|2[0-4]\d|1\d{2}|[1-9]\d|\d)$/u
-
-function normalizeIPv4 (host) {
-  if (findToken(host, '.') < 3) { return { host, isIPV4: false } }
-  const matches = host.match(IPV4_REG) || []
-  const [address] = matches
-  if (address) {
-    return { host: stripLeadingZeros(address, '.'), isIPV4: true }
-  } else {
-    return { host, isIPV4: false }
-  }
-}
+/** @type {(value: string) => boolean} */
+const isIPv4 = RegExp.prototype.test.bind(/^(?:(?:25[0-5]|2[0-4]\d|1\d{2}|[1-9]\d|\d)\.){3}(?:25[0-5]|2[0-4]\d|1\d{2}|[1-9]\d|\d)$/u)
 
 /**
- * @param {string[]} input
- * @param {boolean} [keepZero=false]
- * @returns {string|undefined}
+ * @param {Array<string>} input
+ * @returns {string}
  */
-function stringArrayToHexStripped (input, keepZero = false) {
+function stringArrayToHexStripped (input) {
   let acc = ''
-  let strip = true
-  for (const c of input) {
-    if (HEX[c] === undefined) return undefined
-    if (c !== '0' && strip === true) strip = false
-    if (!strip) acc += c
+  let code = 0
+  let i = 0
+
+  for (i = 0; i < input.length; i++) {
+    code = input[i].charCodeAt(0)
+    if (code === 48) {
+      continue
+    }
+    if (!((code >= 48 && code <= 57) || (code >= 65 && code <= 70) || (code >= 97 && code <= 102))) {
+      return ''
+    }
+    acc += input[i]
+    break
   }
-  if (keepZero && acc.length === 0) acc = '0'
+
+  for (i += 1; i < input.length; i++) {
+    code = input[i].charCodeAt(0)
+    if (!((code >= 48 && code <= 57) || (code >= 65 && code <= 70) || (code >= 97 && code <= 102))) {
+      return ''
+    }
+    acc += input[i]
+  }
   return acc
 }
 
+/**
+ * @typedef {Object} GetIPV6Result
+ * @property {boolean} error - Indicates if there was an error parsing the IPv6 address.
+ * @property {string} address - The parsed IPv6 address.
+ * @property {string} [zone] - The zone identifier, if present.
+ */
+
+/**
+ * @param {string} value
+ * @returns {boolean}
+ */
+const nonSimpleDomain = RegExp.prototype.test.bind(/[^!"$&'()*+,\-.;=_`a-z{}~]/u)
+
+/**
+ * @param {Array<string>} buffer
+ * @returns {boolean}
+ */
+function consumeIsZone (buffer) {
+  buffer.length = 0
+  return true
+}
+
+/**
+ * @param {Array<string>} buffer
+ * @param {Array<string>} address
+ * @param {GetIPV6Result} output
+ * @returns {boolean}
+ */
+function consumeHextets (buffer, address, output) {
+  if (buffer.length) {
+    const hex = stringArrayToHexStripped(buffer)
+    if (hex !== '') {
+      address.push(hex)
+    } else {
+      output.error = true
+      return false
+    }
+    buffer.length = 0
+  }
+  return true
+}
+
+/**
+ * @param {string} input
+ * @returns {GetIPV6Result}
+ */
 function getIPV6 (input) {
   let tokenCount = 0
   const output = { error: false, address: '', zone: '' }
+  /** @type {Array<string>} */
   const address = []
+  /** @type {Array<string>} */
   const buffer = []
-  let isZone = false
   let endipv6Encountered = false
   let endIpv6 = false
 
-  function consume () {
-    if (buffer.length) {
-      if (isZone === false) {
-        const hex = stringArrayToHexStripped(buffer)
-        if (hex !== undefined) {
-          address.push(hex)
-        } else {
-          output.error = true
-          return false
-        }
-      }
-      buffer.length = 0
-    }
-    return true
-  }
+  let consume = consumeHextets
 
   for (let i = 0; i < input.length; i++) {
     const cursor = input[i]
@@ -114671,29 +118434,28 @@ function getIPV6 (input) {
       if (endipv6Encountered === true) {
         endIpv6 = true
       }
-      if (!consume()) { break }
-      tokenCount++
-      address.push(':')
-      if (tokenCount > 7) {
+      if (!consume(buffer, address, output)) { break }
+      if (++tokenCount > 7) {
         // not valid
         output.error = true
         break
       }
-      if (i - 1 >= 0 && input[i - 1] === ':') {
+      if (i > 0 && input[i - 1] === ':') {
         endipv6Encountered = true
       }
+      address.push(':')
       continue
     } else if (cursor === '%') {
-      if (!consume()) { break }
+      if (!consume(buffer, address, output)) { break }
       // switch to zone detection
-      isZone = true
+      consume = consumeIsZone
     } else {
       buffer.push(cursor)
       continue
     }
   }
   if (buffer.length) {
-    if (isZone) {
+    if (consume === consumeIsZone) {
       output.zone = buffer.join('')
     } else if (endIpv6) {
       address.push(buffer.join(''))
@@ -114705,6 +118467,17 @@ function getIPV6 (input) {
   return output
 }
 
+/**
+ * @typedef {Object} NormalizeIPv6Result
+ * @property {string} host - The normalized host.
+ * @property {string} [escapedHost] - The escaped host.
+ * @property {boolean} isIPV6 - Indicates if the host is an IPv6 address.
+ */
+
+/**
+ * @param {string} host
+ * @returns {NormalizeIPv6Result}
+ */
 function normalizeIPv6 (host) {
   if (findToken(host, ':') < 2) { return { host, isIPV6: false } }
   const ipv6 = getIPV6(host)
@@ -114716,35 +118489,17 @@ function normalizeIPv6 (host) {
       newHost += '%' + ipv6.zone
       escapedHost += '%25' + ipv6.zone
     }
-    return { host: newHost, escapedHost, isIPV6: true }
+    return { host: newHost, isIPV6: true, escapedHost }
   } else {
     return { host, isIPV6: false }
   }
 }
 
-function stripLeadingZeros (str, token) {
-  let out = ''
-  let skip = true
-  const l = str.length
-  for (let i = 0; i < l; i++) {
-    const c = str[i]
-    if (c === '0' && skip) {
-      if ((i + 1 <= l && str[i + 1] === token) || i + 1 === l) {
-        out += c
-        skip = false
-      }
-    } else {
-      if (c === token) {
-        skip = true
-      } else {
-        skip = false
-      }
-      out += c
-    }
-  }
-  return out
-}
-
+/**
+ * @param {string} str
+ * @param {string} token
+ * @returns {number}
+ */
 function findToken (str, token) {
   let ind = 0
   for (let i = 0; i < str.length; i++) {
@@ -114753,99 +118508,161 @@ function findToken (str, token) {
   return ind
 }
 
-const RDS1 = /^\.\.?\//u
-const RDS2 = /^\/\.(?:\/|$)/u
-const RDS3 = /^\/\.\.(?:\/|$)/u
-const RDS5 = /^\/?(?:.|\n)*?(?=\/|$)/u
-
-function removeDotSegments (input) {
+/**
+ * @param {string} path
+ * @returns {string}
+ *
+ * @see https://datatracker.ietf.org/doc/html/rfc3986#section-5.2.4
+ */
+function removeDotSegments (path) {
+  let input = path
   const output = []
+  let nextSlash = -1
+  let len = 0
 
-  while (input.length) {
-    if (input.match(RDS1)) {
-      input = input.replace(RDS1, '')
-    } else if (input.match(RDS2)) {
-      input = input.replace(RDS2, '/')
-    } else if (input.match(RDS3)) {
-      input = input.replace(RDS3, '/')
-      output.pop()
-    } else if (input === '.' || input === '..') {
-      input = ''
-    } else {
-      const im = input.match(RDS5)
-      if (im) {
-        const s = im[0]
-        input = input.slice(s.length)
-        output.push(s)
+  // eslint-disable-next-line no-cond-assign
+  while (len = input.length) {
+    if (len === 1) {
+      if (input === '.') {
+        break
+      } else if (input === '/') {
+        output.push('/')
+        break
       } else {
-        throw new Error('Unexpected dot segment condition')
+        output.push(input)
+        break
+      }
+    } else if (len === 2) {
+      if (input[0] === '.') {
+        if (input[1] === '.') {
+          break
+        } else if (input[1] === '/') {
+          input = input.slice(2)
+          continue
+        }
+      } else if (input[0] === '/') {
+        if (input[1] === '.' || input[1] === '/') {
+          output.push('/')
+          break
+        }
+      }
+    } else if (len === 3) {
+      if (input === '/..') {
+        if (output.length !== 0) {
+          output.pop()
+        }
+        output.push('/')
+        break
       }
     }
+    if (input[0] === '.') {
+      if (input[1] === '.') {
+        if (input[2] === '/') {
+          input = input.slice(3)
+          continue
+        }
+      } else if (input[1] === '/') {
+        input = input.slice(2)
+        continue
+      }
+    } else if (input[0] === '/') {
+      if (input[1] === '.') {
+        if (input[2] === '/') {
+          input = input.slice(2)
+          continue
+        } else if (input[2] === '.') {
+          if (input[3] === '/') {
+            input = input.slice(3)
+            if (output.length !== 0) {
+              output.pop()
+            }
+            continue
+          }
+        }
+      }
+    }
+
+    // Rule 2E: Move normal path segment to output
+    if ((nextSlash = input.indexOf('/', 1)) === -1) {
+      output.push(input)
+      break
+    } else {
+      output.push(input.slice(0, nextSlash))
+      input = input.slice(nextSlash)
+    }
   }
+
   return output.join('')
 }
 
-function normalizeComponentEncoding (components, esc) {
+/**
+ * @param {import('../types/index').URIComponent} component
+ * @param {boolean} esc
+ * @returns {import('../types/index').URIComponent}
+ */
+function normalizeComponentEncoding (component, esc) {
   const func = esc !== true ? escape : unescape
-  if (components.scheme !== undefined) {
-    components.scheme = func(components.scheme)
+  if (component.scheme !== undefined) {
+    component.scheme = func(component.scheme)
   }
-  if (components.userinfo !== undefined) {
-    components.userinfo = func(components.userinfo)
+  if (component.userinfo !== undefined) {
+    component.userinfo = func(component.userinfo)
   }
-  if (components.host !== undefined) {
-    components.host = func(components.host)
+  if (component.host !== undefined) {
+    component.host = func(component.host)
   }
-  if (components.path !== undefined) {
-    components.path = func(components.path)
+  if (component.path !== undefined) {
+    component.path = func(component.path)
   }
-  if (components.query !== undefined) {
-    components.query = func(components.query)
+  if (component.query !== undefined) {
+    component.query = func(component.query)
   }
-  if (components.fragment !== undefined) {
-    components.fragment = func(components.fragment)
+  if (component.fragment !== undefined) {
+    component.fragment = func(component.fragment)
   }
-  return components
+  return component
 }
 
-function recomposeAuthority (components) {
+/**
+ * @param {import('../types/index').URIComponent} component
+ * @returns {string|undefined}
+ */
+function recomposeAuthority (component) {
   const uriTokens = []
 
-  if (components.userinfo !== undefined) {
-    uriTokens.push(components.userinfo)
+  if (component.userinfo !== undefined) {
+    uriTokens.push(component.userinfo)
     uriTokens.push('@')
   }
 
-  if (components.host !== undefined) {
-    let host = unescape(components.host)
-    const ipV4res = normalizeIPv4(host)
-
-    if (ipV4res.isIPV4) {
-      host = ipV4res.host
-    } else {
-      const ipV6res = normalizeIPv6(ipV4res.host)
+  if (component.host !== undefined) {
+    let host = unescape(component.host)
+    if (!isIPv4(host)) {
+      const ipV6res = normalizeIPv6(host)
       if (ipV6res.isIPV6 === true) {
         host = `[${ipV6res.escapedHost}]`
       } else {
-        host = components.host
+        host = component.host
       }
     }
     uriTokens.push(host)
   }
 
-  if (typeof components.port === 'number' || typeof components.port === 'string') {
+  if (typeof component.port === 'number' || typeof component.port === 'string') {
     uriTokens.push(':')
-    uriTokens.push(String(components.port))
+    uriTokens.push(String(component.port))
   }
 
   return uriTokens.length ? uriTokens.join('') : undefined
 };
 
 module.exports = {
+  nonSimpleDomain,
   recomposeAuthority,
   normalizeComponentEncoding,
   removeDotSegments,
-  normalizeIPv4,
+  isIPv4,
+  isUUID,
   normalizeIPv6,
   stringArrayToHexStripped
 }
@@ -114866,6 +118683,14 @@ module.exports = /*#__PURE__*/JSON.parse('{"$id":"https://raw.githubusercontent.
 
 "use strict";
 module.exports = /*#__PURE__*/JSON.parse('{"$schema":"http://json-schema.org/draft-07/schema#","$id":"http://json-schema.org/draft-07/schema#","title":"Core schema meta-schema","definitions":{"schemaArray":{"type":"array","minItems":1,"items":{"$ref":"#"}},"nonNegativeInteger":{"type":"integer","minimum":0},"nonNegativeIntegerDefault0":{"allOf":[{"$ref":"#/definitions/nonNegativeInteger"},{"default":0}]},"simpleTypes":{"enum":["array","boolean","integer","null","number","object","string"]},"stringArray":{"type":"array","items":{"type":"string"},"uniqueItems":true,"default":[]}},"type":["object","boolean"],"properties":{"$id":{"type":"string","format":"uri-reference"},"$schema":{"type":"string","format":"uri"},"$ref":{"type":"string","format":"uri-reference"},"$comment":{"type":"string"},"title":{"type":"string"},"description":{"type":"string"},"default":true,"readOnly":{"type":"boolean","default":false},"examples":{"type":"array","items":true},"multipleOf":{"type":"number","exclusiveMinimum":0},"maximum":{"type":"number"},"exclusiveMaximum":{"type":"number"},"minimum":{"type":"number"},"exclusiveMinimum":{"type":"number"},"maxLength":{"$ref":"#/definitions/nonNegativeInteger"},"minLength":{"$ref":"#/definitions/nonNegativeIntegerDefault0"},"pattern":{"type":"string","format":"regex"},"additionalItems":{"$ref":"#"},"items":{"anyOf":[{"$ref":"#"},{"$ref":"#/definitions/schemaArray"}],"default":true},"maxItems":{"$ref":"#/definitions/nonNegativeInteger"},"minItems":{"$ref":"#/definitions/nonNegativeIntegerDefault0"},"uniqueItems":{"type":"boolean","default":false},"contains":{"$ref":"#"},"maxProperties":{"$ref":"#/definitions/nonNegativeInteger"},"minProperties":{"$ref":"#/definitions/nonNegativeIntegerDefault0"},"required":{"$ref":"#/definitions/stringArray"},"additionalProperties":{"$ref":"#"},"definitions":{"type":"object","additionalProperties":{"$ref":"#"},"default":{}},"properties":{"type":"object","additionalProperties":{"$ref":"#"},"default":{}},"patternProperties":{"type":"object","additionalProperties":{"$ref":"#"},"propertyNames":{"format":"regex"},"default":{}},"dependencies":{"type":"object","additionalProperties":{"anyOf":[{"$ref":"#"},{"$ref":"#/definitions/stringArray"}]}},"propertyNames":{"$ref":"#"},"const":true,"enum":{"type":"array","items":true,"minItems":1,"uniqueItems":true},"type":{"anyOf":[{"$ref":"#/definitions/simpleTypes"},{"type":"array","items":{"$ref":"#/definitions/simpleTypes"},"minItems":1,"uniqueItems":true}]},"format":{"type":"string"},"contentMediaType":{"type":"string"},"contentEncoding":{"type":"string"},"if":{"$ref":"#"},"then":{"$ref":"#"},"else":{"$ref":"#"},"allOf":{"$ref":"#/definitions/schemaArray"},"anyOf":{"$ref":"#/definitions/schemaArray"},"oneOf":{"$ref":"#/definitions/schemaArray"},"not":{"$ref":"#"}},"default":true}');
+
+/***/ }),
+
+/***/ 22040:
+/***/ ((module) => {
+
+"use strict";
+module.exports = /*#__PURE__*/JSON.parse('[{"name":"Agola CI","constant":"AGOLA","env":"AGOLA_GIT_REF","pr":"AGOLA_PULL_REQUEST_ID"},{"name":"Appcircle","constant":"APPCIRCLE","env":"AC_APPCIRCLE","pr":{"env":"AC_GIT_PR","ne":"false"}},{"name":"AppVeyor","constant":"APPVEYOR","env":"APPVEYOR","pr":"APPVEYOR_PULL_REQUEST_NUMBER"},{"name":"AWS CodeBuild","constant":"CODEBUILD","env":"CODEBUILD_BUILD_ARN","pr":{"env":"CODEBUILD_WEBHOOK_EVENT","any":["PULL_REQUEST_CREATED","PULL_REQUEST_UPDATED","PULL_REQUEST_REOPENED"]}},{"name":"Azure Pipelines","constant":"AZURE_PIPELINES","env":"TF_BUILD","pr":{"BUILD_REASON":"PullRequest"}},{"name":"Bamboo","constant":"BAMBOO","env":"bamboo_planKey"},{"name":"Bitbucket Pipelines","constant":"BITBUCKET","env":"BITBUCKET_COMMIT","pr":"BITBUCKET_PR_ID"},{"name":"Bitrise","constant":"BITRISE","env":"BITRISE_IO","pr":"BITRISE_PULL_REQUEST"},{"name":"Buddy","constant":"BUDDY","env":"BUDDY_WORKSPACE_ID","pr":"BUDDY_EXECUTION_PULL_REQUEST_ID"},{"name":"Buildkite","constant":"BUILDKITE","env":"BUILDKITE","pr":{"env":"BUILDKITE_PULL_REQUEST","ne":"false"}},{"name":"CircleCI","constant":"CIRCLE","env":"CIRCLECI","pr":"CIRCLE_PULL_REQUEST"},{"name":"Cirrus CI","constant":"CIRRUS","env":"CIRRUS_CI","pr":"CIRRUS_PR"},{"name":"Cloudflare Pages","constant":"CLOUDFLARE_PAGES","env":"CF_PAGES"},{"name":"Cloudflare Workers","constant":"CLOUDFLARE_WORKERS","env":"WORKERS_CI"},{"name":"Codefresh","constant":"CODEFRESH","env":"CF_BUILD_ID","pr":{"any":["CF_PULL_REQUEST_NUMBER","CF_PULL_REQUEST_ID"]}},{"name":"Codemagic","constant":"CODEMAGIC","env":"CM_BUILD_ID","pr":"CM_PULL_REQUEST"},{"name":"Codeship","constant":"CODESHIP","env":{"CI_NAME":"codeship"}},{"name":"Drone","constant":"DRONE","env":"DRONE","pr":{"DRONE_BUILD_EVENT":"pull_request"}},{"name":"dsari","constant":"DSARI","env":"DSARI"},{"name":"Earthly","constant":"EARTHLY","env":"EARTHLY_CI"},{"name":"Expo Application Services","constant":"EAS","env":"EAS_BUILD"},{"name":"Gerrit","constant":"GERRIT","env":"GERRIT_PROJECT"},{"name":"Gitea Actions","constant":"GITEA_ACTIONS","env":"GITEA_ACTIONS"},{"name":"GitHub Actions","constant":"GITHUB_ACTIONS","env":"GITHUB_ACTIONS","pr":{"GITHUB_EVENT_NAME":"pull_request"}},{"name":"GitLab CI","constant":"GITLAB","env":"GITLAB_CI","pr":"CI_MERGE_REQUEST_ID"},{"name":"GoCD","constant":"GOCD","env":"GO_PIPELINE_LABEL"},{"name":"Google Cloud Build","constant":"GOOGLE_CLOUD_BUILD","env":"BUILDER_OUTPUT"},{"name":"Harness CI","constant":"HARNESS","env":"HARNESS_BUILD_ID"},{"name":"Heroku","constant":"HEROKU","env":{"env":"NODE","includes":"/app/.heroku/node/bin/node"}},{"name":"Hudson","constant":"HUDSON","env":"HUDSON_URL"},{"name":"Jenkins","constant":"JENKINS","env":["JENKINS_URL","BUILD_ID"],"pr":{"any":["ghprbPullId","CHANGE_ID"]}},{"name":"LayerCI","constant":"LAYERCI","env":"LAYERCI","pr":"LAYERCI_PULL_REQUEST"},{"name":"Magnum CI","constant":"MAGNUM","env":"MAGNUM"},{"name":"Netlify CI","constant":"NETLIFY","env":"NETLIFY","pr":{"env":"PULL_REQUEST","ne":"false"}},{"name":"Nevercode","constant":"NEVERCODE","env":"NEVERCODE","pr":{"env":"NEVERCODE_PULL_REQUEST","ne":"false"}},{"name":"Prow","constant":"PROW","env":"PROW_JOB_ID"},{"name":"ReleaseHub","constant":"RELEASEHUB","env":"RELEASE_BUILD_ID"},{"name":"Render","constant":"RENDER","env":"RENDER","pr":{"IS_PULL_REQUEST":"true"}},{"name":"Sail CI","constant":"SAIL","env":"SAILCI","pr":"SAIL_PULL_REQUEST_NUMBER"},{"name":"Screwdriver","constant":"SCREWDRIVER","env":"SCREWDRIVER","pr":{"env":"SD_PULL_REQUEST","ne":"false"}},{"name":"Semaphore","constant":"SEMAPHORE","env":"SEMAPHORE","pr":"PULL_REQUEST_NUMBER"},{"name":"Sourcehut","constant":"SOURCEHUT","env":{"CI_NAME":"sourcehut"}},{"name":"Strider CD","constant":"STRIDER","env":"STRIDER"},{"name":"TaskCluster","constant":"TASKCLUSTER","env":["TASK_ID","RUN_ID"]},{"name":"TeamCity","constant":"TEAMCITY","env":"TEAMCITY_VERSION"},{"name":"Travis CI","constant":"TRAVIS","env":"TRAVIS","pr":{"env":"TRAVIS_PULL_REQUEST","ne":"false"}},{"name":"Vela","constant":"VELA","env":"VELA","pr":{"VELA_PULL_REQUEST":"1"}},{"name":"Vercel","constant":"VERCEL","env":{"any":["NOW_BUILDER","VERCEL"]},"pr":"VERCEL_GIT_PULL_REQUEST_ID"},{"name":"Visual Studio App Center","constant":"APPCENTER","env":"APPCENTER_BUILD_ID"},{"name":"Woodpecker","constant":"WOODPECKER","env":{"CI":"woodpecker"},"pr":{"CI_BUILD_EVENT":"pull_request"}},{"name":"Xcode Cloud","constant":"XCODE_CLOUD","env":"CI_XCODE_PROJECT","pr":"CI_PULL_REQUEST_NUMBER"},{"name":"Xcode Server","constant":"XCODE_SERVER","env":"XCS"}]');
 
 /***/ }),
 

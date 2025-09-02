@@ -59,10 +59,10 @@ describe('runCLICommand', () => {
 
   test('ubuntu os', async () => {
     await runCLICommand(exec, 'ubuntu', commands)
-    expect(exec.exec).toHaveBeenCalledWith(`sudo --preserve-env ${commands[0]}`)
+    expect(exec.exec).not.toHaveBeenCalledWith(`sudo --preserve-env ${commands[0]}`)
   })
 
-  test('any other os', async () => {
+  test('all os', async () => {
     await runCLICommand(exec, 'darwin', commands)
     expect(exec.exec).not.toHaveBeenCalledWith(`sudo --preserve-env ${commands[0]}`)
     expect(exec.exec).toHaveBeenCalledWith(commands[0])

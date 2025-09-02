@@ -39,10 +39,7 @@ function validate (schema, data) {
  * @param {Array<string>} commands the commands to run
  */
 async function runCLICommand (exec, os, commands) {
-  for (let command of commands) {
-    if (os?.startsWith('ubuntu')) {
-      command = `sudo --preserve-env ${command}`
-    }
+  for (const command of commands) {
     await exec.exec(command)
   }
 }
