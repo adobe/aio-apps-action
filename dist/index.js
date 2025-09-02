@@ -108587,6 +108587,7 @@ async function main () {
   const techAccEmail = core.getInput('technicalAccountEmail')
   const imsOrgId = core.getInput('imsOrgId')
   const forceDeploy = core.getInput('forceDeploy')
+  const verbose = core.getInput('verbose')
 
   // check command
   if (!command) {
@@ -108608,6 +108609,9 @@ async function main () {
         }
         if (forceDeploy === 'true') {
           deployCmd = `${deployCmd} --force-deploy`
+        }
+        if (verbose === 'true') {
+          deployCmd = `${deployCmd} --verbose`
         }
         console.log(`Executing command ${command}!`)
         await runCLICommand(exec, os, [
