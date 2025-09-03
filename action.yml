@@ -10,6 +10,15 @@ inputs:
   command:
     description: 'Command'
     required: true
+  noPublish:
+    description: 'boolean to control publishing of Extensions'
+    required: false
+  forceDeploy:
+    description: 'boolean to control force deploy'
+    required: false
+  verbose:
+    description: 'boolean to control verbose output'
+    required: false
   CLIENTID:
     description: 'IMS Client ID'
   CLIENTSECRET: 
