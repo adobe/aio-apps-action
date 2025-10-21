@@ -1,4 +1,4 @@
-[![Build Status](https://travis-ci.com/adobe/aio-apps-action.svg?branch=master)](https://travis-ci.com/adobe/aio-apps-action)
+[![Build Status](https://github.com/adobe/aio-apps-action/workflows/Node.js%20CI/badge.svg)](https://github.com/adobe/aio-apps-action/workflows/Node.js%20CI/badge.svg)
 [![License](https://img.shields.io/badge/License-Apache%202.0-blue.svg)](https://opensource.org/licenses/Apache-2.0)
 
 # aio-apps-action
@@ -166,6 +166,7 @@ jobs:
           AIO_PROJECT_ID: ${{ secrets.AIO_PROJECT_ID_PROD }}
           AIO_PROJECT_NAME: ${{ secrets.AIO_PROJECT_NAME_PROD }}
           AIO_PROJECT_ORG_ID: ${{ secrets.AIO_PROJECT_ORG_ID_PROD }}
+          AIO_PROJECT_ORG_IMS__ORG__ID: ${{ secrets.IMSORGID_PROD }} 
           AIO_PROJECT_WORKSPACE_ID: ${{ secrets.AIO_PROJECT_WORKSPACE_ID_PROD }}
           AIO_PROJECT_WORKSPACE_NAME: ${{ secrets.AIO_PROJECT_WORKSPACE_NAME_PROD }}
           AIO_PROJECT_WORKSPACE_DETAILS_SERVICES: ${{ secrets.AIO_PROJECT_WORKSPACE_DETAILS_SERVICES_PROD }}
@@ -232,6 +233,7 @@ jobs:
           AIO_PROJECT_ID: ${{ secrets.AIO_PROJECT_ID_PROD }}
           AIO_PROJECT_NAME: ${{ secrets.AIO_PROJECT_NAME_PROD }}
           AIO_PROJECT_ORG_ID: ${{ secrets.AIO_PROJECT_ORG_ID_PROD }}
+          AIO_PROJECT_ORG_IMS__ORG__ID: ${{ secrets.IMSORGID_PROD }} 
           AIO_PROJECT_WORKSPACE_ID: ${{ secrets.AIO_PROJECT_WORKSPACE_ID_PROD }}
           AIO_PROJECT_WORKSPACE_NAME: ${{ secrets.AIO_PROJECT_WORKSPACE_NAME_PROD }}
           AIO_PROJECT_WORKSPACE_DETAILS_SERVICES: ${{ secrets.AIO_PROJECT_WORKSPACE_DETAILS_SERVICES_PROD }}

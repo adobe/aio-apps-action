@@ -129,6 +129,91 @@ describe('deploy command', () => {
       expect(runCLICommand).toHaveBeenCalledWith(expect.any(Object), actionValues.os, ['aio app deploy --no-build --no-publish --force-deploy'])
     })
   })
+
+  test('verbose is true', async () => {
+    const actionValues = {
+      command: 'deploy',
+      verbose: 'true'
+    }
+    core.getInput.mockImplementation((key) => {
+      return actionValues[key]
+    })
+
+    jest.isolateModules(async () => {
+      await require('../src/index') // run the action
+      expect(core.setFailed).not.toHaveBeenCalled()
+      expect(runCLICommand).toHaveBeenCalledWith(expect.any(Object), actionValues.os, ['aio app deploy --no-build --verbose'])
+    })
+  })
+
+  test('verbose is not set', async () => {
+    const actionValues = {
+      command: 'deploy'
+      // verbose is not set
+    }
+    core.getInput.mockImplementation((key) => {
+      return actionValues[key]
+    })
+
+    jest.isolateModules(async () => {
+      await require('../src/index') // run the action
+      expect(core.setFailed).not.toHaveBeenCalled()
+      expect(runCLICommand).toHaveBeenCalledWith(expect.any(Object), actionValues.os, ['aio app deploy --no-build'])
+      expect(runCLICommand).not.toHaveBeenCalledWith(expect.any(Object), actionValues.os, ['aio app deploy --no-build --verbose'])
+    })
+  })
+
+  test('verbose with noPublish', async () => {
+    const actionValues = {
+      command: 'deploy',
+      noPublish: 'true',
+      verbose: 'true'
+    }
+    core.getInput.mockImplementation((key) => {
+      return actionValues[key]
+    })
+
+    jest.isolateModules(async () => {
+      await require('../src/index') // run the action
+      expect(core.setFailed).not.toHaveBeenCalled()
+      expect(runCLICommand).toHaveBeenCalledWith(expect.any(Object), actionValues.os, ['aio app deploy --no-build --no-publish --verbose'])
+    })
+  })
+
+  test('verbose with forceDeploy', async () => {
+    const actionValues = {
+      command: 'deploy',
+      forceDeploy: 'true',
+      verbose: 'true'
+    }
+    core.getInput.mockImplementation((key) => {
+      return actionValues[key]
+    })
+
+    jest.isolateModules(async () => {
+      await require('../src/index') // run the action
+      expect(core.setFailed).not.toHaveBeenCalled()
+      expect(runCLICommand).toHaveBeenCalledWith(expect.any(Object), actionValues.os, ['aio app deploy --no-build --force-deploy --verbose'])
+    })
+  })
+
+  test('verbose with all flags', async () => {
+    const actionValues = {
+      command: 'deploy',
+      noPublish: 'true',
+      forceDeploy: 'true',
+      verbose: 'true'
+    }
+    core.getInput.mockImplementation((key) => {
+      return actionValues[key]
+    })
+
+    jest.isolateModules(async () => {
+      await require('../src/index') // run the action
+      expect(core.setFailed).not.toHaveBeenCalled()
+      expect(runCLICommand).toHaveBeenCalledWith(expect.any(Object), actionValues.os, ['aio app deploy --no-build --no-publish --force-deploy --verbose'])
+    })
+  })
 })
 
 // eslint-disable-next-line jest/valid-title
