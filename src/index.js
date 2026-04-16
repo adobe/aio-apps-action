@@ -17,7 +17,8 @@ const {
   runCLICommand,
   generateAuthToken,
   generateOAuthSTSAuthToken,
-  setTokenAsEnvVar
+  setTokenAsEnvVar,
+  setS2SCredentialsAsEnvVars
 } = require('./utils')
 
 /**
@@ -105,6 +106,7 @@ async function main () {
         })
         console.log('Generated oauth sts token successfully')
         setTokenAsEnvVar(core, token)
+        setS2SCredentialsAsEnvVars(core, { clientId, clientSecret, imsOrgId, scopes })
       }
       break
     default:

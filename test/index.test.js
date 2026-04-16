@@ -11,7 +11,7 @@ governing permissions and limitations under the License.
 */
 
 const core = require('@actions/core')
-const { runCLICommand, generateAuthToken, generateOAuthSTSAuthToken, setTokenAsEnvVar } = require('../src/utils')
+const { runCLICommand, generateAuthToken, generateOAuthSTSAuthToken, setTokenAsEnvVar, setS2SCredentialsAsEnvVars } = require('../src/utils')
 
 // //////////////////////////////////////////
 
@@ -24,7 +24,8 @@ jest.mock('../src/utils', () => ({
   runCLICommand: jest.fn(),
   generateAuthToken: jest.fn(),
   generateOAuthSTSAuthToken: jest.fn(),
-  setTokenAsEnvVar: jest.fn()
+  setTokenAsEnvVar: jest.fn(),
+  setS2SCredentialsAsEnvVars: jest.fn()
 }))
 
 // //////////////////////////////////////////
@@ -37,6 +38,7 @@ beforeEach(() => {
   generateAuthToken.mockClear()
   generateOAuthSTSAuthToken.mockClear()
   setTokenAsEnvVar.mockClear()
+  setS2SCredentialsAsEnvVars.mockClear()
 })
 
 test('no inputs', async () => {
@@ -256,7 +258,11 @@ test('auth command', async () => {
 test('oauth_sts command', async () => {
   const token = 'sts-abc-123-xyz'
   const actionValues = {
-    command: 'oauth_sts'
+    command: 'oauth_sts',
+    clientId: 'client-id',
+    clientSecret: 'client-secret',
+    imsOrgId: 'org-id',
+    scopes: 'AdobeID,openid'
   }
   core.getInput.mockImplementation((key) => {
     return actionValues[key]
@@ -268,5 +274,11 @@ test('oauth_sts command', async () => {
     expect(core.setFailed).not.toHaveBeenCalled()
     expect(runCLICommand).not.toHaveBeenCalled()
     expect(setTokenAsEnvVar).toHaveBeenCalledWith(expect.any(Object), token)
+    expect(setS2SCredentialsAsEnvVars).toHaveBeenCalledWith(expect.any(Object), {
+      clientId: actionValues.clientId,
+      clientSecret: actionValues.clientSecret,
+      imsOrgId: actionValues.imsOrgId,
+      scopes: actionValues.scopes
+    })
   })
 })
