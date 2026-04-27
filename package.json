@@ -1,6 +1,6 @@
 {
   "name": "aio-apps-action",
-  "version": "4.0.0",
+  "version": "4.1.0",
   "description": "GitHub Action to Build, Test and Deploy AIO Apps",
   "scripts": {
     "lint-fix": "npm run lint -- --fix",
