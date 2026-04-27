@@ -17,7 +17,8 @@ const {
   runCLICommand,
   generateAuthToken,
   generateOAuthSTSAuthToken,
-  setTokenAsEnvVar
+  setTokenAsEnvVar,
+  setS2SCredentialsAsEnvVars
 } = require('../src/utils')
 
 // //////////////////////////////////////////
@@ -323,4 +324,46 @@ test('setTokenAsEnvVar', () => {
   expect(core.exportVariable).toHaveBeenCalledWith('AIO_IMS_CONTEXTS_CLI_ACCESS__TOKEN_TOKEN', token)
   expect(core.exportVariable).toHaveBeenCalledWith('AIO_IMS_CONTEXTS_CLI_ACCESS__TOKEN_EXPIRY', expect.any(Number))
   expect(core.setSecret).toHaveBeenCalledWith('AIO_IMS_CONTEXTS_CLI_ACCESS__TOKEN_TOKEN')
+})
+
+describe('setS2SCredentialsAsEnvVars', () => {
+  const baseParams = {
+    clientId: 'client-id',
+    clientSecret: 'client-secret',
+    imsOrgId: 'org-id'
+  }
+
+  const defaultScopes = [
+    'AdobeID', 'openid', 'read_organizations',
+    'additional_info.projectedProductContext', 'additional_info.roles',
+    'adobeio_api', 'read_client_secret', 'manage_client_secrets'
+  ]
+
+  test('exports all four IMS_OAUTH_S2S env vars', () => {
+    setS2SCredentialsAsEnvVars(core, { ...baseParams, scopes: 'scope1,scope2' })
+    expect(core.exportVariable).toHaveBeenCalledWith('IMS_OAUTH_S2S_CLIENT_ID', 'client-id')
+    expect(core.exportVariable).toHaveBeenCalledWith('IMS_OAUTH_S2S_CLIENT_SECRET', 'client-secret')
+    expect(core.exportVariable).toHaveBeenCalledWith('IMS_OAUTH_S2S_ORG_ID', 'org-id')
+    expect(core.exportVariable).toHaveBeenCalledWith('IMS_OAUTH_S2S_SCOPES', JSON.stringify(['scope1', 'scope2']))
+  })
+
+  test('masks client secret', () => {
+    setS2SCredentialsAsEnvVars(core, { ...baseParams })
+    expect(core.setSecret).toHaveBeenCalledWith('IMS_OAUTH_S2S_CLIENT_SECRET')
+  })
+
+  test('uses default scopes when scopes not provided', () => {
+    setS2SCredentialsAsEnvVars(core, { ...baseParams })
+    expect(core.exportVariable).toHaveBeenCalledWith('IMS_OAUTH_S2S_SCOPES', JSON.stringify(defaultScopes))
+  })
+
+  test('uses only first secret from comma-separated clientSecret', () => {
+    setS2SCredentialsAsEnvVars(core, { ...baseParams, clientSecret: 'secret-one,secret-two' })
+    expect(core.exportVariable).toHaveBeenCalledWith('IMS_OAUTH_S2S_CLIENT_SECRET', 'secret-one')
+  })
+
+  test('trims whitespace from scopes', () => {
+    setS2SCredentialsAsEnvVars(core, { ...baseParams, scopes: 'scope1, scope2' })
+    expect(core.exportVariable).toHaveBeenCalledWith('IMS_OAUTH_S2S_SCOPES', JSON.stringify(['scope1', 'scope2']))
+  })
 })

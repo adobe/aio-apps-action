@@ -227,10 +227,44 @@ function setTokenAsEnvVar (core, token) {
   console.log('Done setting env var')
 }
 
+/**
+ * Export S2S credentials as env vars so that aio app deploy can inject them
+ * into actions annotated with include-ims-credentials: true.
+ *
+ * @private
+ * @param {object} core the @actions/core object
+ * @param {object} params
+ * @param {string} params.clientId
+ * @param {string} params.clientSecret comma-separated secrets; first value is used
+ * @param {string} params.imsOrgId
+ * @param {string} [params.scopes] comma-separated scopes; defaults to I/O Management API scopes
+ */
+function setS2SCredentialsAsEnvVars (core, { clientId, clientSecret, imsOrgId, scopes }) {
+  const finalScopes = scopes
+    ? scopes.split(',').map(s => s.trim())
+    : [
+        'AdobeID',
+        'openid',
+        'read_organizations',
+        'additional_info.projectedProductContext',
+        'additional_info.roles',
+        'adobeio_api',
+        'read_client_secret',
+        'manage_client_secrets'
+      ]
+
+  core.exportVariable('IMS_OAUTH_S2S_CLIENT_ID', clientId)
+  core.exportVariable('IMS_OAUTH_S2S_CLIENT_SECRET', clientSecret.split(',')[0].trim())
+  core.setSecret('IMS_OAUTH_S2S_CLIENT_SECRET')
+  core.exportVariable('IMS_OAUTH_S2S_ORG_ID', imsOrgId)
+  core.exportVariable('IMS_OAUTH_S2S_SCOPES', JSON.stringify(finalScopes))
+}
+
 module.exports = {
   runCLICommand,
   getAuthToken,
   generateAuthToken,
   generateOAuthSTSAuthToken,
-  setTokenAsEnvVar
+  setTokenAsEnvVar,
+  setS2SCredentialsAsEnvVars
 }
