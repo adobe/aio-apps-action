@@ -98,7 +98,7 @@ jobs:
       - name: Build
         env:
           AIO_RUNTIME_NAMESPACE: ${{ secrets.AIO_RUNTIME_NAMESPACE_PROD }}
-        uses: adobe/aio-apps-action@3.3.0
+        uses: adobe/aio-apps-action@4.1.0
         with:
           os: ${{ matrix.os }}
           command: build
@@ -106,7 +106,7 @@ jobs:
         env:
           AIO_RUNTIME_NAMESPACE: ${{ secrets.AIO_RUNTIME_NAMESPACE_PROD }}
           AIO_RUNTIME_AUTH: ${{ secrets.AIO_RUNTIME_AUTH_PROD }}
-        uses: adobe/aio-apps-action@3.3.0
+        uses: adobe/aio-apps-action@4.1.0
         with:
           os: ${{ matrix.os }}
           command: deploy
@@ -144,7 +144,7 @@ jobs:
           os: ${{ matrix.os }}
           version: 10.x.x
       - name: Auth
-        uses: adobe/aio-apps-action@3.3.0
+        uses: adobe/aio-apps-action@4.1.0
         with:
           os: ${{ matrix.os }}
           command: auth
@@ -156,7 +156,7 @@ jobs:
       - name: Build
         env:
           AIO_RUNTIME_NAMESPACE: ${{ secrets.AIO_RUNTIME_NAMESPACE_PROD }}
-        uses: adobe/aio-apps-action@3.3.0
+        uses: adobe/aio-apps-action@4.1.0
         with:
           os: ${{ matrix.os }}
           command: build
@@ -171,7 +171,7 @@ jobs:
           AIO_PROJECT_WORKSPACE_ID: ${{ secrets.AIO_PROJECT_WORKSPACE_ID_PROD }}
           AIO_PROJECT_WORKSPACE_NAME: ${{ secrets.AIO_PROJECT_WORKSPACE_NAME_PROD }}
           AIO_PROJECT_WORKSPACE_DETAILS_SERVICES: ${{ secrets.AIO_PROJECT_WORKSPACE_DETAILS_SERVICES_PROD }}
-        uses: adobe/aio-apps-action@3.3.0
+        uses: adobe/aio-apps-action@4.1.0
         with:
           os: ${{ matrix.os }}
           command: deploy
@@ -210,7 +210,7 @@ jobs:
           os: ${{ matrix.os }}
           version: 10.x.x
       - name: Auth
-        uses: adobe/aio-apps-action@3.3.0
+        uses: adobe/aio-apps-action@4.1.0
         with:
           os: ${{ matrix.os }}
           command: oauth_sts
@@ -223,7 +223,7 @@ jobs:
       - name: Build
         env:
           AIO_RUNTIME_NAMESPACE: ${{ secrets.AIO_RUNTIME_NAMESPACE_PROD }}
-        uses: adobe/aio-apps-action@3.3.0
+        uses: adobe/aio-apps-action@4.1.0
         with:
           os: ${{ matrix.os }}
           command: build
@@ -238,7 +238,7 @@ jobs:
           AIO_PROJECT_WORKSPACE_ID: ${{ secrets.AIO_PROJECT_WORKSPACE_ID_PROD }}
           AIO_PROJECT_WORKSPACE_NAME: ${{ secrets.AIO_PROJECT_WORKSPACE_NAME_PROD }}
           AIO_PROJECT_WORKSPACE_DETAILS_SERVICES: ${{ secrets.AIO_PROJECT_WORKSPACE_DETAILS_SERVICES_PROD }}
-        uses: adobe/aio-apps-action@3.3.0
+        uses: adobe/aio-apps-action@4.1.0
         with:
           os: ${{ matrix.os }}
           command: deploy
